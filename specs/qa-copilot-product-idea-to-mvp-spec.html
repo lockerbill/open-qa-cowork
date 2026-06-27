@@ -1,0 +1,1266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QA Copilot — Product Idea to MVP Specification</title>
+  <style>
+    :root { color-scheme: light; --fg:#182033; --muted:#5b667a; --line:#dbe2ef; --bg:#f7f9fc; --card:#ffffff; --accent:#b87900; --code:#f1f5f9; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif; background:var(--bg); color:var(--fg); line-height:1.6; }
+    main { max-width:980px; margin:0 auto; padding:42px 24px 80px; background:var(--card); box-shadow:0 0 0 1px rgba(20,30,50,.04); }
+    h1 { font-size:2.25rem; line-height:1.15; margin:0 0 20px; color:#111827; }
+    h2 { margin-top:42px; padding-top:18px; border-top:1px solid var(--line); color:#172033; }
+    h3 { margin-top:28px; color:#25304a; }
+    h4 { margin-top:20px; color:#34415f; }
+    p { margin:10px 0; }
+    blockquote { margin:16px 0; padding:12px 16px; border-left:4px solid var(--accent); background:#fff8e6; color:#3b2a00; }
+    pre { overflow:auto; background:#0f172a; color:#e2e8f0; border-radius:10px; padding:16px; font-size:.92rem; }
+    code { background:var(--code); padding:2px 5px; border-radius:5px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    pre code { background:transparent; padding:0; }
+    table { width:100%; border-collapse:collapse; margin:16px 0; font-size:.94rem; }
+    th, td { border:1px solid var(--line); padding:9px 10px; vertical-align:top; }
+    th { background:#eef2f7; text-align:left; }
+    .li { margin:4px 0 4px 18px; }
+    hr { border:0; border-top:1px solid var(--line); margin:28px 0; }
+  </style>
+</head>
+<body>
+<main>
+<h1>QA Copilot — Product Idea to MVP Specification</h1>
+
+<p><strong>Generated:</strong> 2026-06-27</p>
+<p><strong>Source:</strong> Chat export about QA Copilot browser extension idea</p>
+<p><strong>Audience:</strong> AI coding agents, founders, product builders, QA leads, engineering teams</p>
+<p><strong>Primary output:</strong> MVP-ready product and technical specification</p>
+
+<hr>
+
+<h2>1. Executive Summary</h2>
+
+<p>QA Copilot is a browser-extension-based AI assistant for manual QA testers working on web apps and SPAs. It pairs with a human tester during exploratory testing, understands the current page, suggests what to test, records manual QA activity, captures evidence, generates bug reports, and converts real human-tested flows into Playwright regression tests.</p>
+
+<p>The product should <strong>not</strong> initially position itself as a fully autonomous testing agent. The stronger wedge is:</p>
+
+<blockquote><strong>An AI pair tester for manual QA teams that turns exploratory testing into better documentation, bug reports, and reusable automation.</strong></blockquote>
+
+<p>This positioning avoids the crowded “AI tests your whole app automatically” category and focuses on a practical workflow that current open-source tools do not fully cover.</p>
+
+<hr>
+
+<h2>2. Problem Statement</h2>
+
+<p>Manual QA testers spend significant time:</p>
+
+<div class="li">• Deciding what to test on complex screens.</div>
+<div class="li">• Repeating exploratory flows.</div>
+<div class="li">• Writing test cases after the fact.</div>
+<div class="li">• Capturing screenshots, console logs, network failures, and reproduction steps.</div>
+<div class="li">• Filing structured bug reports.</div>
+<div class="li">• Translating manual flows into automation.</div>
+<div class="li">• Communicating test coverage to product and engineering teams.</div>
+
+<p>Existing tools cover pieces of this workflow, but there is no dominant open-source solution that combines:</p>
+
+<p>1. Browser extension side panel.</p>
+<p>2. Human manual QA session capture.</p>
+<p>3. AI page understanding.</p>
+<p>4. Conversational test guidance.</p>
+<p>5. Evidence collection.</p>
+<p>6. Bug report generation.</p>
+<p>7. Playwright test generation.</p>
+
+<hr>
+
+<h2>3. Product Vision</h2>
+
+<p>QA Copilot helps human QA testers test better, document faster, and gradually convert manual testing into automation.</p>
+
+<p>The core loop:</p>
+
+<pre><code>Observe page → QA asks questions → QA tests manually → AI records → AI creates test cases/bug reports → AI generates Playwright tests → QA reviews</code></pre>
+
+<p>The AI should act as a <strong>pair tester</strong>, not an uncontrolled autonomous agent.</p>
+
+<hr>
+
+<h2>4. Target Users</h2>
+
+<h3>4.1 Primary Users</h3>
+
+<h4>Manual QA Testers</h4>
+
+<p>Manual QA testers performing exploratory testing, regression testing, release testing, and UAT support.</p>
+
+<p>They need help with:</p>
+
+<div class="li">• Test planning.</div>
+<div class="li">• Session capture.</div>
+<div class="li">• Evidence collection.</div>
+<div class="li">• Bug reports.</div>
+<div class="li">• Converting repeatable flows into automation.</div>
+
+<h4>Small Software Teams Without Dedicated Automation Engineers</h4>
+
+<p>Teams that rely on manual QA but want to build automation incrementally.</p>
+
+<h4>Product Owners and Business Analysts</h4>
+
+<p>Users doing UAT who need prompts like:</p>
+
+<div class="li">• “What should I test on this screen?”</div>
+<div class="li">• “Create acceptance test scenarios.”</div>
+<div class="li">• “Summarize what I tested.”</div>
+
+<h4>Automation Engineers</h4>
+
+<p>Engineers can use the tool to:</p>
+
+<div class="li">• Discover selectors.</div>
+<div class="li">• Generate first-draft Playwright tests.</div>
+<div class="li">• Improve testability.</div>
+<div class="li">• Turn QA flows into regression candidates.</div>
+
+<hr>
+
+<h2>5. Market and Open-Source Landscape</h2>
+
+<h3>5.1 Existing Categories</h3>
+
+<table>
+<thead><tr><th>Category</th><th>Existing OSS Strength</th><th>Gap for QA Copilot</th></tr></thead>
+<tbody>
+<tr><td>Playwright automation</td><td>Very strong</td><td>Not human QA workflow focused</td></tr>
+<tr><td>AI browser agents</td><td>Strong and growing</td><td>Usually autonomous task execution, not QA pairing</td></tr>
+<tr><td>Natural-language E2E testing</td><td>Emerging</td><td>Mostly developer/test-code oriented</td></tr>
+<tr><td>Exploratory testing extensions</td><td>Exists</td><td>Mostly non-AI, note/screenshot/report focused</td></tr>
+<tr><td>Test recording/codegen</td><td>Mature</td><td>Not AI-assisted QA reasoning</td></tr>
+<tr><td>Self-healing regression testing</td><td>Emerging</td><td>Usually suite-level, not manual session copilot</td></tr>
+</tbody></table>
+
+<h3>5.2 Relevant Open-Source Projects</h3>
+
+<h4>Microsoft Playwright — <code>microsoft/playwright</code></h4>
+
+<p><strong>Overlap:</strong> Browser automation, codegen, locator generation, trace/video/screenshot capture, CI integration.</p>
+
+<p><strong>Missing:</strong> QA side panel, conversational assistant, manual exploratory session intelligence, bug report workflow.</p>
+
+<p><strong>Recommendation:</strong> Use as the core automation engine.</p>
+
+<h4>Microsoft Playwright MCP — <code>microsoft/playwright-mcp</code></h4>
+
+<p><strong>Overlap:</strong> Lets LLMs inspect and control pages through Playwright using structured page snapshots.</p>
+
+<p><strong>Missing:</strong> QA product UX, browser extension, manual session capture, bug lifecycle.</p>
+
+<p><strong>Recommendation:</strong> Study for page context and AI browser-control patterns.</p>
+
+<h4>TestZeus Hercules — <code>test-zeus-ai/testzeus-hercules</code></h4>
+
+<p><strong>Overlap:</strong> AI test automation, Gherkin-style input, UI/API/security/accessibility/visual validation.</p>
+
+<p><strong>Missing:</strong> Manual QA browser-extension pairing and exploratory session capture.</p>
+
+<h4>Promptwright — <code>testronai/promptwright</code></h4>
+
+<p><strong>Overlap:</strong> Natural language to browser workflows and Playwright/Cypress/Selenium scripts.</p>
+
+<p><strong>Missing:</strong> Browser extension side panel, QA evidence workflow, human exploratory session capture.</p>
+
+<p><strong>Recommendation:</strong> Study prompt and script-generation approaches.</p>
+
+<h4>Shortest — <code>antiwork/shortest</code></h4>
+
+<p><strong>Overlap:</strong> Natural-language E2E tests built on Playwright.</p>
+
+<p><strong>Missing:</strong> Human manual QA workflow, evidence capture, browser extension.</p>
+
+<h4>Browser Use — <code>browser-use/browser-use</code></h4>
+
+<p><strong>Overlap:</strong> AI browser automation framework.</p>
+
+<p><strong>Missing:</strong> QA lifecycle product layer.</p>
+
+<h4>Vibetest Use — <code>browser-use/vibetest-use</code></h4>
+
+<p><strong>Overlap:</strong> Uses Browser Use agents to test websites for UI bugs, broken links, and accessibility issues.</p>
+
+<p><strong>Missing:</strong> Manual QA copilot workflow and session-to-test pipeline.</p>
+
+<h4>Skyvern — <code>Skyvern-AI/skyvern</code></h4>
+
+<p><strong>Overlap:</strong> LLM/computer-vision browser workflows.</p>
+
+<p><strong>Missing:</strong> QA-specific test case and evidence lifecycle.</p>
+
+<h4>Agent Q — <code>Top-Q/agent-q</code></h4>
+
+<p><strong>Overlap:</strong> AI UI testing with Playwright and dynamic code generation.</p>
+
+<p><strong>Missing:</strong> Browser extension and manual QA session workflow.</p>
+
+<p><strong>Useful idea:</strong> Cache/reuse generated successful code.</p>
+
+<h4>Passmark — <code>bug0inc/passmark</code></h4>
+
+<p><strong>Overlap:</strong> AI browser regression testing, natural-language steps, auto-healing, caching.</p>
+
+<p><strong>Missing:</strong> Manual QA extension and bug evidence workflow.</p>
+
+<p><strong>Recommendation:</strong> Study later for self-healing regression features.</p>
+
+<h4>Exploratory Testing Chrome Extension — <code>morvader/ExploratoryTestingChromeExtension</code></h4>
+
+<p><strong>Overlap:</strong> Browser extension, exploratory sessions, notes, screenshots, bug reports, URL tracking, exports.</p>
+
+<p><strong>Missing:</strong> AI page understanding, Playwright generation, AI-assisted test cases.</p>
+
+<p><strong>Recommendation:</strong> Strong reference for manual QA extension UX.</p>
+
+<h4>E2T Exploratory Testing Tool — <code>xblanc33/e2t</code></h4>
+
+<p><strong>Overlap:</strong> Exploratory testing campaigns and expeditions.</p>
+
+<p><strong>Missing:</strong> AI, automation generation, Playwright runner.</p>
+
+<h4>Azure DevOps Test &amp; Feedback Extension</h4>
+
+<p><strong>Overlap:</strong> Browser extension, exploratory testing, screenshots/videos, bug creation, test case creation, evidence capture.</p>
+
+<p><strong>Missing:</strong> AI-first workflow, Playwright generation, open product flexibility.</p>
+
+<p><strong>Strategic lesson:</strong> Manual QA browser extension + evidence capture is a validated workflow.</p>
+
+<h3>5.3 Competitive Gap</h3>
+
+<p>The strongest gap is:</p>
+
+<blockquote><strong>Browser extension + AI copilot + manual QA session capture + Playwright generation + bug evidence workflow.</strong></blockquote>
+
+<p>No major open-source project clearly combines all of these into one QA-first product.</p>
+
+<hr>
+
+<h2>6. Product Positioning</h2>
+
+<h3>6.1 Avoid This Positioning</h3>
+
+<p>Do not lead with:</p>
+
+<blockquote>“AI automatically tests your entire web app.”</blockquote>
+
+<p>This is too broad, difficult to trust, and overlaps heavily with existing AI browser agents.</p>
+
+<p>Do not lead with:</p>
+
+<blockquote>“AI Playwright test generator.”</blockquote>
+
+<p>This overlaps with Playwright codegen and natural-language E2E frameworks.</p>
+
+<h3>6.2 Recommended Positioning</h3>
+
+<blockquote><strong>QA Copilot is an AI pair tester for manual QA teams. It watches exploratory testing in the browser, helps QA decide what to test, captures evidence, writes bug reports, and converts human-tested flows into Playwright regression tests.</strong></blockquote>
+
+<h3>6.3 MVP Promise</h3>
+
+<p>The MVP should promise:</p>
+
+<div class="li">• Better manual test coverage.</div>
+<div class="li">• Faster test documentation.</div>
+<div class="li">• Faster bug reports.</div>
+<div class="li">• Reusable Playwright drafts from real QA flows.</div>
+<div class="li">• Safer human-in-the-loop automation.</div>
+
+<p>The MVP should not promise:</p>
+
+<div class="li">• Full autonomous app crawling.</div>
+<div class="li">• Complete replacement of QA.</div>
+<div class="li">• Perfect generated tests.</div>
+<div class="li">• Self-healing test maintenance on day one.</div>
+
+<hr>
+
+<h2>7. Core User Journey</h2>
+
+<h3>7.1 Example Scenario</h3>
+
+<p>A QA tester opens a staging app and clicks the QA Copilot extension.</p>
+
+<p>The extension detects:</p>
+
+<blockquote>“I see a Create Purchase Order page with 12 fields, 3 required fields, supplier autocomplete, item lines table, release schedule section, Save Draft, Submit, and Cancel actions.”</blockquote>
+
+<p>QA asks:</p>
+
+<blockquote>“Create test cases for this page.”</blockquote>
+
+<p>QA Copilot generates test cases grouped by:</p>
+
+<div class="li">• Required field validation.</div>
+<div class="li">• Supplier selection.</div>
+<div class="li">• Line item entry.</div>
+<div class="li">• Release schedule.</div>
+<div class="li">• Save draft.</div>
+<div class="li">• Submit.</div>
+<div class="li">• Cancel.</div>
+<div class="li">• Error handling.</div>
+<div class="li">• Permissions.</div>
+<div class="li">• Accessibility.</div>
+
+<p>QA manually performs a flow:</p>
+
+<p>1. Opened Create PO page.</p>
+<p>2. Selected supplier.</p>
+<p>3. Added item line.</p>
+<p>4. Added release line.</p>
+<p>5. Clicked Submit.</p>
+<p>6. Validation error appeared: “Release date is required.”</p>
+
+<p>QA says:</p>
+
+<blockquote>“Generate a bug report. Expected release date to default from requested delivery date.”</blockquote>
+
+<p>QA Copilot creates a Jira-ready bug report with:</p>
+
+<div class="li">• Steps to reproduce.</div>
+<div class="li">• Actual result.</div>
+<div class="li">• Expected result.</div>
+<div class="li">• Screenshot.</div>
+<div class="li">• Console logs.</div>
+<div class="li">• Network failures.</div>
+<div class="li">• Suggested Playwright reproduction.</div>
+
+<p>Then QA says:</p>
+
+<blockquote>“Create a regression test for this.”</blockquote>
+
+<p>QA Copilot generates a Playwright test draft for review.</p>
+
+<hr>
+
+<h2>8. MVP Scope</h2>
+
+<h3>8.1 MVP 1 — Human QA Assistant + Recorder</h3>
+
+<p>This is the recommended first build.</p>
+
+<h4>Include</h4>
+
+<div class="li">• Chrome extension side panel.</div>
+<div class="li">• Current page analysis.</div>
+<div class="li">• DOM element inventory.</div>
+<div class="li">• Manual QA chat.</div>
+<div class="li">• Generate manual test cases for current page.</div>
+<div class="li">• Record user actions.</div>
+<div class="li">• Convert recorded flow into Playwright test draft.</div>
+<div class="li">• Generate bug report with screenshot and steps.</div>
+<div class="li">• Export Markdown / JSON / Playwright TypeScript.</div>
+<div class="li">• Capture console errors.</div>
+<div class="li">• Capture failed network requests.</div>
+<div class="li">• Basic selector quality advisor.</div>
+
+<h4>Exclude</h4>
+
+<div class="li">• Full autonomous crawling.</div>
+<div class="li">• Complex visual regression.</div>
+<div class="li">• Self-healing tests.</div>
+<div class="li">• Deep Jira/Azure DevOps integration.</div>
+<div class="li">• Multi-user team workspace.</div>
+<div class="li">• CI integration.</div>
+<div class="li">• Production-grade cloud runner.</div>
+
+<h3>8.2 MVP 2 — Controlled Page-Level Test Execution</h3>
+
+<p>Add after MVP 1 proves useful:</p>
+
+<div class="li">• Run generated Playwright tests locally.</div>
+<div class="li">• Capture pass/fail results.</div>
+<div class="li">• Capture screenshot/video/trace.</div>
+<div class="li">• Basic accessibility scan.</div>
+<div class="li">• Form validation auto-tests.</div>
+<div class="li">• Table sorting/filtering auto-tests.</div>
+<div class="li">• Button/link checks.</div>
+<div class="li">• Safe-mode approval for destructive actions.</div>
+
+<h3>8.3 MVP 3 — Team/Product Integration</h3>
+
+<p>Add:</p>
+
+<div class="li">• Project workspace.</div>
+<div class="li">• Saved test suites.</div>
+<div class="li">• Jira/Azure DevOps/GitHub integration.</div>
+<div class="li">• TestRail/Xray export.</div>
+<div class="li">• CI integration.</div>
+<div class="li">• Pull request generation for Playwright tests.</div>
+<div class="li">• Role-based access.</div>
+<div class="li">• Environment profiles.</div>
+
+<h3>8.4 MVP 4 — Smarter AI Agent</h3>
+
+<p>Add:</p>
+
+<div class="li">• Page exploration suggestions.</div>
+<div class="li">• Requirements-to-test-plan generation.</div>
+<div class="li">• Acceptance criteria comparison.</div>
+<div class="li">• Self-healing selectors.</div>
+<div class="li">• Visual regression.</div>
+<div class="li">• API contract awareness.</div>
+<div class="li">• Multi-page flow testing.</div>
+
+<hr>
+
+<h2>9. MVP Feature Requirements</h2>
+
+<h3>9.1 Browser Extension Side Panel</h3>
+
+<h4>Description</h4>
+
+<p>A Chrome extension side panel that appears beside the application under test and provides chat, page summary, session timeline, evidence, and export controls.</p>
+
+<h4>Requirements</h4>
+
+<div class="li">• Open side panel from extension icon.</div>
+<div class="li">• Display current URL, page title, and route.</div>
+<div class="li">• Show detected page summary.</div>
+<div class="li">• Provide chat input.</div>
+<div class="li">• Show AI responses.</div>
+<div class="li">• Show current recording status.</div>
+<div class="li">• Let user start/stop session recording.</div>
+<div class="li">• Let user export outputs.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• User can open side panel on any allowed web app.</div>
+<div class="li">• User can ask “What should I test on this page?” and receive page-aware suggestions.</div>
+<div class="li">• User can start a recording session and see captured actions in the side panel.</div>
+
+<hr>
+
+<h3>9.2 Page Scanner</h3>
+
+<h4>Description</h4>
+
+<p>Content script scans the current web page and creates a compact page model for AI reasoning.</p>
+
+<h4>Capture</h4>
+
+<div class="li">• URL and route.</div>
+<div class="li">• Page title.</div>
+<div class="li">• Visible headings.</div>
+<div class="li">• Forms and fields.</div>
+<div class="li">• Labels and placeholders.</div>
+<div class="li">• Buttons and links.</div>
+<div class="li">• Tables and grids.</div>
+<div class="li">• Modals/dialogs.</div>
+<div class="li">• Toasts and validation messages.</div>
+<div class="li">• Disabled/hidden states.</div>
+<div class="li">• ARIA roles and accessible names.</div>
+<div class="li">• Selector candidates.</div>
+<div class="li">• Shadow DOM and iframe awareness where feasible.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• Scanner returns a compact JSON page summary.</div>
+<div class="li">• Scanner identifies interactable elements.</div>
+<div class="li">• Scanner avoids sending full raw DOM by default.</div>
+<div class="li">• Scanner masks sensitive input values.</div>
+
+<hr>
+
+<h3>9.3 SPA Route Observer</h3>
+
+<h4>Description</h4>
+
+<p>Detect client-side route changes without full page reloads.</p>
+
+<h4>Requirements</h4>
+
+<div class="li">• Observe History API changes: <code>pushState</code>, <code>replaceState</code>, <code>popstate</code>.</div>
+<div class="li">• Observe hash route changes.</div>
+<div class="li">• Rescan page after route changes.</div>
+<div class="li">• Add route change events to session timeline.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• Navigating inside an SPA updates page context.</div>
+<div class="li">• Session timeline records route transitions.</div>
+
+<hr>
+
+<h3>9.4 Event Recorder</h3>
+
+<h4>Description</h4>
+
+<p>Record manual QA interactions and outcomes.</p>
+
+<h4>Capture</h4>
+
+<div class="li">• Clicks.</div>
+<div class="li">• Text input with sensitive value masking.</div>
+<div class="li">• Select/dropdown changes.</div>
+<div class="li">• Checkbox/radio changes.</div>
+<div class="li">• File upload metadata only, not file contents by default.</div>
+<div class="li">• Navigation events.</div>
+<div class="li">• Form submissions.</div>
+<div class="li">• Visible validation messages after actions.</div>
+<div class="li">• Toasts and modals after actions.</div>
+<div class="li">• Screenshot checkpoints.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• User can record a flow and export ordered steps.</div>
+<div class="li">• Values from password/token/secret fields are not stored.</div>
+<div class="li">• The generated flow can be used as input to a Playwright test draft.</div>
+
+<hr>
+
+<h3>9.5 Console and Network Capture</h3>
+
+<h4>Description</h4>
+
+<p>Collect technical evidence useful for bug reports.</p>
+
+<h4>Requirements</h4>
+
+<div class="li">• Capture console errors and warnings.</div>
+<div class="li">• Capture failed network requests.</div>
+<div class="li">• Capture status code, method, URL path, timing, and error reason.</div>
+<div class="li">• Redact query parameters and headers by default.</div>
+<div class="li">• Do not capture sensitive request/response bodies by default.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• Bug report includes relevant console errors.</div>
+<div class="li">• Bug report includes failed network request summary.</div>
+<div class="li">• Sensitive data is redacted.</div>
+
+<hr>
+
+<h3>9.6 Screenshot Capture</h3>
+
+<h4>Description</h4>
+
+<p>Capture screenshots as evidence.</p>
+
+<h4>Requirements</h4>
+
+<div class="li">• Capture current visible tab.</div>
+<div class="li">• Attach screenshot to session timeline.</div>
+<div class="li">• Allow user-triggered screenshot.</div>
+<div class="li">• Allow automatic screenshot on bug report generation.</div>
+<div class="li">• Support basic masking rules later.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• User can generate a bug report with an attached screenshot.</div>
+
+<hr>
+
+<h3>9.7 Conversational QA Assistant</h3>
+
+<h4>Description</h4>
+
+<p>AI chat interface that understands current page summary and session history.</p>
+
+<h4>Example Commands</h4>
+
+<div class="li">• “What should I test on this page?”</div>
+<div class="li">• “Create boundary test cases for this form.”</div>
+<div class="li">• “Find risky areas on this screen.”</div>
+<div class="li">• “Generate regression tests from my last 5 minutes.”</div>
+<div class="li">• “Summarize what I tested.”</div>
+<div class="li">• “Create a bug report.”</div>
+<div class="li">• “Explain why this button is disabled.”</div>
+<div class="li">• “Run the happy path.”</div>
+<div class="li">• “Run invalid input tests.”</div>
+<div class="li">• “Check accessibility.”</div>
+<div class="li">• “Create Playwright tests for this flow.”</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• AI uses page context and session events in responses.</div>
+<div class="li">• AI distinguishes facts observed from assumptions.</div>
+<div class="li">• AI asks for missing expected behavior when needed for bug reports.</div>
+
+<hr>
+
+<h3>9.8 Test Case Generator</h3>
+
+<h4>Description</h4>
+
+<p>Generate manual test cases for the current page or recorded flow.</p>
+
+<h4>Output Formats</h4>
+
+<p>1. Manual test cases.</p>
+<p>2. Gherkin.</p>
+<p>3. JSON.</p>
+<p>4. CSV-compatible structure.</p>
+
+<h4>Manual Test Case Fields</h4>
+
+<div class="li">• ID.</div>
+<div class="li">• Title.</div>
+<div class="li">• Preconditions.</div>
+<div class="li">• Steps.</div>
+<div class="li">• Expected result.</div>
+<div class="li">• Test data.</div>
+<div class="li">• Priority.</div>
+<div class="li">• Risk level.</div>
+<div class="li">• Type: functional, negative, accessibility, UI/UX, data, permission.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• User can export page-level test cases in Markdown and JSON.</div>
+<div class="li">• Test cases reference detected page elements.</div>
+<div class="li">• Risk and priority are included.</div>
+
+<hr>
+
+<h3>9.9 Bug Report Generator</h3>
+
+<h4>Description</h4>
+
+<p>Create structured bug reports from session evidence and QA comments.</p>
+
+<h4>Output Fields</h4>
+
+<div class="li">• Title.</div>
+<div class="li">• Severity.</div>
+<div class="li">• Priority.</div>
+<div class="li">• Environment.</div>
+<div class="li">• Browser.</div>
+<div class="li">• URL.</div>
+<div class="li">• User role if known.</div>
+<div class="li">• Preconditions.</div>
+<div class="li">• Steps to reproduce.</div>
+<div class="li">• Actual result.</div>
+<div class="li">• Expected result.</div>
+<div class="li">• Screenshot references.</div>
+<div class="li">• Console errors.</div>
+<div class="li">• Network failures.</div>
+<div class="li">• Suggested root cause.</div>
+<div class="li">• Suggested Playwright reproduction.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• User can generate a Jira-ready Markdown bug report.</div>
+<div class="li">• Report includes steps from recorded session.</div>
+<div class="li">• Report includes evidence summary.</div>
+<div class="li">• Report clearly labels AI assumptions.</div>
+
+<hr>
+
+<h3>9.10 Playwright Test Generator</h3>
+
+<h4>Description</h4>
+
+<p>Convert recorded flows or generated scenarios into Playwright TypeScript draft tests.</p>
+
+<h4>Requirements</h4>
+
+<div class="li">• Prefer stable selectors.</div>
+<div class="li">• Use role-based locators where possible.</div>
+<div class="li">• Use <code>data-testid</code> / <code>data-test</code> where available.</div>
+<div class="li">• Avoid brittle generated class selectors.</div>
+<div class="li">• Include TODO comments where selectors are fragile.</div>
+<div class="li">• Include assertions based on observed results.</div>
+<div class="li">• Generate deterministic code that can be reviewed by humans.</div>
+
+<h4>Selector Priority</h4>
+
+<p>1. <code>data-testid</code>.</p>
+<p>2. <code>data-test</code>.</p>
+<p>3. ARIA role + accessible name.</p>
+<p>4. <code>aria-label</code>.</p>
+<p>5. Associated label.</p>
+<p>6. Stable visible text.</p>
+<p>7. CSS selector fallback.</p>
+<p>8. XPath only as last resort.</p>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• User can export a <code>.spec.ts</code> Playwright draft.</div>
+<div class="li">• Generated tests compile syntactically.</div>
+<div class="li">• Generated tests include human-readable comments for assumptions.</div>
+<div class="li">• Fragile selectors are flagged.</div>
+
+<hr>
+
+<h3>9.11 Selector Quality Advisor</h3>
+
+<h4>Description</h4>
+
+<p>Analyze page elements and recommend testability improvements.</p>
+
+<h4>Requirements</h4>
+
+<div class="li">• Detect missing accessible names.</div>
+<div class="li">• Detect buttons/inputs without stable selectors.</div>
+<div class="li">• Detect duplicate labels where automation may be ambiguous.</div>
+<div class="li">• Recommend <code>data-testid</code> names.</div>
+<div class="li">• Explain why a selector is fragile.</div>
+
+<h4>Acceptance Criteria</h4>
+
+<div class="li">• User can ask “How testable is this page?”</div>
+<div class="li">• Tool returns actionable selector/testability recommendations.</div>
+
+<hr>
+
+<h2>10. AI Context Design</h2>
+
+<p>Do not send the entire DOM to the LLM by default. Use layered context.</p>
+
+<h3>10.1 Layer 1 — Page Summary</h3>
+
+<pre><code>{
+  &quot;url&quot;: &quot;/orders/create&quot;,
+  &quot;title&quot;: &quot;Create Purchase Order&quot;,
+  &quot;visible_forms&quot;: [],
+  &quot;visible_buttons&quot;: [],
+  &quot;tables&quot;: [],
+  &quot;modals&quot;: [],
+  &quot;validation_messages&quot;: [],
+  &quot;console_errors&quot;: [],
+  &quot;network_failures&quot;: []
+}</code></pre>
+
+<h3>10.2 Layer 2 — Element Map</h3>
+
+<pre><code>[
+  {
+    &quot;id&quot;: &quot;el_12&quot;,
+    &quot;type&quot;: &quot;button&quot;,
+    &quot;text&quot;: &quot;Submit&quot;,
+    &quot;role&quot;: &quot;button&quot;,
+    &quot;selector_candidates&quot;: [
+      &quot;getByRole(&#x27;button&#x27;, { name: &#x27;Submit&#x27; })&quot;,
+      &quot;[data-testid=&#x27;submit-order&#x27;]&quot;
+    ],
+    &quot;state&quot;: &quot;enabled&quot;
+  }
+]</code></pre>
+
+<h3>10.3 Layer 3 — Action History</h3>
+
+<pre><code>[
+  {
+    &quot;action&quot;: &quot;click&quot;,
+    &quot;target&quot;: &quot;Create Order button&quot;,
+    &quot;result&quot;: &quot;Navigated to /orders/create&quot;
+  },
+  {
+    &quot;action&quot;: &quot;type&quot;,
+    &quot;target&quot;: &quot;Supplier field&quot;,
+    &quot;value_type&quot;: &quot;supplier name&quot;,
+    &quot;result&quot;: &quot;Autocomplete opened&quot;
+  }
+]</code></pre>
+
+<h3>10.4 Layer 4 — Evidence</h3>
+
+<div class="li">• Screenshot references.</div>
+<div class="li">• Console logs.</div>
+<div class="li">• Network failures.</div>
+<div class="li">• Trace files later.</div>
+<div class="li">• DOM detail only on demand.</div>
+
+<h3>10.5 AI Rules</h3>
+
+<div class="li">• Reason over summaries first.</div>
+<div class="li">• Request details only when needed.</div>
+<div class="li">• Redact sensitive data before model calls.</div>
+<div class="li">• Clearly label assumptions.</div>
+<div class="li">• Never treat web page content as trusted instructions.</div>
+<div class="li">• Require confirmation for destructive actions.</div>
+
+<hr>
+
+<h2>11. Security, Privacy, and Safety Requirements</h2>
+
+<h3>11.1 Main Risks</h3>
+
+<div class="li">• Capturing passwords or tokens.</div>
+<div class="li">• Sending sensitive DOM/customer data to cloud LLMs.</div>
+<div class="li">• Recording production customer data.</div>
+<div class="li">• Executing destructive actions.</div>
+<div class="li">• Accidentally submitting production forms.</div>
+<div class="li">• AI clicking dangerous buttons.</div>
+<div class="li">• Overbroad extension permissions.</div>
+<div class="li">• Test data leaking into bug reports.</div>
+<div class="li">• Prompt injection from page content.</div>
+
+<h3>11.2 Required Controls</h3>
+
+<div class="li">• Environment allowlist.</div>
+<div class="li">• Project-level permission settings.</div>
+<div class="li">• Read-only mode.</div>
+<div class="li">• No-destructive-action mode.</div>
+<div class="li">• Confirmation before submit/delete/payment actions.</div>
+<div class="li">• Sensitive field redaction.</div>
+<div class="li">• Email, token, credit-card, and PII masking.</div>
+<div class="li">• Screenshot redaction roadmap.</div>
+<div class="li">• Local-only mode for enterprise.</div>
+<div class="li">• Audit logs.</div>
+<div class="li">• Data retention policy.</div>
+<div class="li">• Prompt injection protection.</div>
+<div class="li">• User review before export or integration submission.</div>
+
+<h3>11.3 Destructive Action Policy</h3>
+
+<p>The AI must not autonomously perform actions that could:</p>
+
+<div class="li">• Submit production forms.</div>
+<div class="li">• Delete records.</div>
+<div class="li">• Make payments.</div>
+<div class="li">• Send emails/messages.</div>
+<div class="li">• Change account settings.</div>
+<div class="li">• Trigger irreversible workflow transitions.</div>
+
+<p>For MVP 1, the safest policy is:</p>
+
+<blockquote>AI can advise and generate tests, but the human performs live actions. Automated execution is limited to local/staging contexts and requires explicit approval.</blockquote>
+
+<hr>
+
+<h2>12. Technical Architecture</h2>
+
+<h3>12.1 Recommended MVP Architecture</h3>
+
+<pre><code>Chrome Extension
+ ├─ Side Panel Chat UI
+ ├─ Content Script
+ │   ├─ DOM scanner
+ │   ├─ Event recorder
+ │   ├─ Element highlighter
+ │   ├─ Screenshot capture trigger
+ │   ├─ Console/network collectors
+ │   └─ SPA route observer
+ ├─ Background Service Worker
+ │   ├─ Session manager
+ │   ├─ Secure token storage
+ │   ├─ Extension permissions
+ │   └─ Communication bridge
+ └─ Exporter
+     ├─ Markdown
+     ├─ JSON
+     └─ Playwright TypeScript
+
+Backend / AI Service
+ ├─ LLM orchestration
+ ├─ Page context summarizer
+ ├─ Test case generator
+ ├─ Bug report generator
+ ├─ Playwright test generator
+ ├─ Redaction service
+ └─ Project settings
+
+Optional Local Runner — MVP 2+
+ ├─ Playwright runner
+ ├─ Test execution logs
+ ├─ Screenshot/video/trace capture
+ └─ Repo file writer</code></pre>
+
+<h3>12.2 Suggested Stack</h3>
+
+<h4>Browser Extension</h4>
+
+<div class="li">• Chrome Extension Manifest V3.</div>
+<div class="li">• TypeScript.</div>
+<div class="li">• React side panel.</div>
+<div class="li">• Content scripts.</div>
+<div class="li">• Background service worker.</div>
+
+<h4>Automation Runner</h4>
+
+<div class="li">• Node.js.</div>
+<div class="li">• Playwright TypeScript.</div>
+<div class="li">• Optional Docker execution later.</div>
+<div class="li">• Trace/video/screenshot support.</div>
+
+<h4>Backend</h4>
+
+<p>Good options:</p>
+
+<div class="li">• .NET 10 API backend.</div>
+<div class="li">• PostgreSQL.</div>
+<div class="li">• Redis or Hangfire/Quartz.NET for jobs later.</div>
+<div class="li">• S3-compatible object storage for evidence later.</div>
+<div class="li">• LLM gateway supporting OpenAI/Anthropic/local models.</div>
+
+<h4>Recommended Split</h4>
+
+<pre><code>Extension: TypeScript + React
+Runner: Node.js + Playwright
+API backend: .NET 10
+AI orchestration: .NET 10 service or Node/Python worker
+Database: PostgreSQL
+Queue: Hangfire or Quartz.NET
+Storage: S3-compatible object storage</code></pre>
+
+<hr>
+
+<h2>13. Data Model Draft</h2>
+
+<h3>13.1 TestSession</h3>
+
+<pre><code>{
+  &quot;id&quot;: &quot;session_123&quot;,
+  &quot;project_id&quot;: &quot;project_1&quot;,
+  &quot;started_at&quot;: &quot;2026-06-27T10:00:00Z&quot;,
+  &quot;ended_at&quot;: null,
+  &quot;environment&quot;: &quot;staging&quot;,
+  &quot;browser&quot;: &quot;Chrome&quot;,
+  &quot;base_url&quot;: &quot;https://staging.example.com&quot;,
+  &quot;current_url&quot;: &quot;https://staging.example.com/orders/create&quot;,
+  &quot;status&quot;: &quot;recording&quot;
+}</code></pre>
+
+<h3>13.2 PageSnapshot</h3>
+
+<pre><code>{
+  &quot;id&quot;: &quot;page_123&quot;,
+  &quot;session_id&quot;: &quot;session_123&quot;,
+  &quot;url&quot;: &quot;/orders/create&quot;,
+  &quot;title&quot;: &quot;Create Purchase Order&quot;,
+  &quot;summary&quot;: {},
+  &quot;elements&quot;: [],
+  &quot;captured_at&quot;: &quot;2026-06-27T10:01:00Z&quot;
+}</code></pre>
+
+<h3>13.3 ActionEvent</h3>
+
+<pre><code>{
+  &quot;id&quot;: &quot;event_123&quot;,
+  &quot;session_id&quot;: &quot;session_123&quot;,
+  &quot;type&quot;: &quot;click&quot;,
+  &quot;target_element_id&quot;: &quot;el_12&quot;,
+  &quot;target_label&quot;: &quot;Submit&quot;,
+  &quot;selector_candidates&quot;: [],
+  &quot;timestamp&quot;: &quot;2026-06-27T10:02:00Z&quot;,
+  &quot;result_summary&quot;: &quot;Validation error appeared&quot;
+}</code></pre>
+
+<h3>13.4 EvidenceItem</h3>
+
+<pre><code>{
+  &quot;id&quot;: &quot;evidence_123&quot;,
+  &quot;session_id&quot;: &quot;session_123&quot;,
+  &quot;type&quot;: &quot;screenshot&quot;,
+  &quot;path&quot;: &quot;evidence/session_123/screenshot_1.png&quot;,
+  &quot;metadata&quot;: {},
+  &quot;captured_at&quot;: &quot;2026-06-27T10:03:00Z&quot;
+}</code></pre>
+
+<h3>13.5 GeneratedArtifact</h3>
+
+<pre><code>{
+  &quot;id&quot;: &quot;artifact_123&quot;,
+  &quot;session_id&quot;: &quot;session_123&quot;,
+  &quot;type&quot;: &quot;playwright_test&quot;,
+  &quot;format&quot;: &quot;typescript&quot;,
+  &quot;content&quot;: &quot;...&quot;,
+  &quot;created_at&quot;: &quot;2026-06-27T10:05:00Z&quot;,
+  &quot;review_status&quot;: &quot;draft&quot;
+}</code></pre>
+
+<hr>
+
+<h2>14. API Draft</h2>
+
+<h3>14.1 Analyze Page</h3>
+
+<p><code>POST /api/page/analyze</code></p>
+
+<p>Request:</p>
+
+<pre><code>{
+  &quot;project_id&quot;: &quot;project_1&quot;,
+  &quot;url&quot;: &quot;/orders/create&quot;,
+  &quot;page_summary&quot;: {},
+  &quot;element_map&quot;: []
+}</code></pre>
+
+<p>Response:</p>
+
+<pre><code>{
+  &quot;summary&quot;: &quot;Create Purchase Order page with supplier, line items, and submit actions.&quot;,
+  &quot;risks&quot;: [],
+  &quot;suggested_tests&quot;: []
+}</code></pre>
+
+<h3>14.2 Generate Test Cases</h3>
+
+<p><code>POST /api/generate/test-cases</code></p>
+
+<p>Request:</p>
+
+<pre><code>{
+  &quot;page_snapshot_id&quot;: &quot;page_123&quot;,
+  &quot;format&quot;: &quot;manual_markdown&quot;,
+  &quot;focus&quot;: &quot;functional_negative_accessibility&quot;
+}</code></pre>
+
+<p>Response:</p>
+
+<pre><code>{
+  &quot;artifact_id&quot;: &quot;artifact_123&quot;,
+  &quot;content&quot;: &quot;...&quot;
+}</code></pre>
+
+<h3>14.3 Generate Bug Report</h3>
+
+<p><code>POST /api/generate/bug-report</code></p>
+
+<p>Request:</p>
+
+<pre><code>{
+  &quot;session_id&quot;: &quot;session_123&quot;,
+  &quot;user_note&quot;: &quot;Expected release date to default from requested delivery date.&quot;,
+  &quot;include_screenshot&quot;: true,
+  &quot;include_console_errors&quot;: true,
+  &quot;include_network_failures&quot;: true
+}</code></pre>
+
+<p>Response:</p>
+
+<pre><code>{
+  &quot;artifact_id&quot;: &quot;artifact_456&quot;,
+  &quot;content_markdown&quot;: &quot;...&quot;
+}</code></pre>
+
+<h3>14.4 Generate Playwright Test</h3>
+
+<p><code>POST /api/generate/playwright</code></p>
+
+<p>Request:</p>
+
+<pre><code>{
+  &quot;session_id&quot;: &quot;session_123&quot;,
+  &quot;flow_event_ids&quot;: [&quot;event_1&quot;, &quot;event_2&quot;, &quot;event_3&quot;],
+  &quot;language&quot;: &quot;typescript&quot;
+}</code></pre>
+
+<p>Response:</p>
+
+<pre><code>{
+  &quot;artifact_id&quot;: &quot;artifact_789&quot;,
+  &quot;filename&quot;: &quot;create-purchase-order.spec.ts&quot;,
+  &quot;content&quot;: &quot;...&quot;,
+  &quot;selector_warnings&quot;: []
+}</code></pre>
+
+<hr>
+
+<h2>15. Extension Permission Strategy</h2>
+
+<p>For MVP, use the minimum viable permissions.</p>
+
+<h3>15.1 Suggested Permissions</h3>
+
+<div class="li">• <code>activeTab</code> for current page access after user gesture.</div>
+<div class="li">• <code>scripting</code> to inject content script where needed.</div>
+<div class="li">• <code>sidePanel</code> for Chrome side panel UI.</div>
+<div class="li">• <code>storage</code> for local settings/session cache.</div>
+<div class="li">• <code>tabs</code> only if strictly required for URL/title tracking.</div>
+<div class="li">• Host permissions should be allowlisted by project/environment.</div>
+
+<h3>15.2 Avoid Initially</h3>
+
+<div class="li">• Broad <code>&lt;all_urls&gt;</code> by default.</div>
+<div class="li">• Capturing request/response bodies.</div>
+<div class="li">• Reading cookies unless absolutely necessary.</div>
+<div class="li">• Persistent recording without clear user indicator.</div>
+
+<hr>
+
+<h2>16. MVP Milestones</h2>
+
+<h3>Milestone 1 — Extension Shell</h3>
+
+<div class="li">• Manifest V3 extension.</div>
+<div class="li">• React side panel.</div>
+<div class="li">• Content script handshake.</div>
+<div class="li">• Current URL/title display.</div>
+<div class="li">• Basic settings page.</div>
+
+<h3>Milestone 2 — Page Model</h3>
+
+<div class="li">• DOM scanner.</div>
+<div class="li">• Element map.</div>
+<div class="li">• Selector candidate generation.</div>
+<div class="li">• SPA route observer.</div>
+<div class="li">• Sensitive field masking.</div>
+
+<h3>Milestone 3 — QA Chat</h3>
+
+<div class="li">• Chat UI.</div>
+<div class="li">• Backend/LLM call.</div>
+<div class="li">• Page-aware test suggestions.</div>
+<div class="li">• Markdown response rendering.</div>
+
+<h3>Milestone 4 — Session Recorder</h3>
+
+<div class="li">• Start/stop recording.</div>
+<div class="li">• Capture clicks/input/selects/navigation.</div>
+<div class="li">• Session timeline UI.</div>
+<div class="li">• Export session JSON.</div>
+
+<h3>Milestone 5 — Test Case and Bug Report Generation</h3>
+
+<div class="li">• Generate manual test cases.</div>
+<div class="li">• Generate bug report.</div>
+<div class="li">• Include screenshot, console errors, and network failures.</div>
+<div class="li">• Export Markdown.</div>
+
+<h3>Milestone 6 — Playwright Draft Generation</h3>
+
+<div class="li">• Convert recorded flow to <code>.spec.ts</code>.</div>
+<div class="li">• Selector warnings.</div>
+<div class="li">• Export TypeScript file.</div>
+
+<h3>Milestone 7 — Internal Dogfood</h3>
+
+<div class="li">• Test on 3–5 real SPAs.</div>
+<div class="li">• Measure quality of page summaries.</div>
+<div class="li">• Measure generated test usefulness.</div>
+<div class="li">• Collect QA feedback.</div>
+
+<hr>
+
+<h2>17. Success Metrics</h2>
+
+<h3>17.1 User Value Metrics</h3>
+
+<div class="li">• Time to create test cases reduced by 50%+.</div>
+<div class="li">• Time to write bug reports reduced by 50%+.</div>
+<div class="li">• Number of useful regression candidates generated per session.</div>
+<div class="li">• QA satisfaction score.</div>
+<div class="li">• Percentage of generated Playwright drafts accepted after review.</div>
+
+<h3>17.2 Product Quality Metrics</h3>
+
+<div class="li">• Page scanner detects &gt;90% of visible interactable elements on test apps.</div>
+<div class="li">• Sensitive values redacted in 100% of known sensitive field cases.</div>
+<div class="li">• Generated bug reports include correct reproduction steps in &gt;80% of sessions.</div>
+<div class="li">• Generated Playwright tests compile in &gt;90% of cases.</div>
+<div class="li">• Selector warnings correctly identify fragile selectors.</div>
+
+<h3>17.3 Safety Metrics</h3>
+
+<div class="li">• Zero unapproved destructive actions.</div>
+<div class="li">• Zero known password/token captures.</div>
+<div class="li">• Redaction test suite pass rate 100%.</div>
+
+<hr>
+
+<h2>18. Non-Goals for MVP 1</h2>
+
+<div class="li">• Fully autonomous testing across an entire app.</div>
+<div class="li">• Full test management platform.</div>
+<div class="li">• Full Jira/Azure DevOps bidirectional sync.</div>
+<div class="li">• Production-grade self-hosting.</div>
+<div class="li">• Visual regression engine.</div>
+<div class="li">• Self-healing regression suite.</div>
+<div class="li">• Complete accessibility audit engine.</div>
+<div class="li">• Mobile app testing.</div>
+<div class="li">• Native desktop app testing.</div>
+
+<hr>
+
+<h2>19. Recommended Build Strategy</h2>
+
+<h3>19.1 Do Not Fork One Project Into Everything</h3>
+
+<p>Use existing open-source projects as references and building blocks, but do not start by forking a large autonomous agent framework.</p>
+
+<h3>19.2 Use Playwright Directly</h3>
+
+<p>Playwright should be the automation and generated-test target.</p>
+
+<h3>19.3 Study Existing Projects</h3>
+
+<div class="li">• Study <code>morvader/ExploratoryTestingChromeExtension</code> for QA session UX.</div>
+<div class="li">• Study <code>microsoft/playwright</code> for automation and locator strategy.</div>
+<div class="li">• Study <code>microsoft/playwright-mcp</code> for structured page snapshots for AI.</div>
+<div class="li">• Study <code>testronai/promptwright</code> for prompt-to-script patterns.</div>
+<div class="li">• Study <code>bug0inc/passmark</code> later for self-healing ideas.</div>
+
+<h3>19.4 Keep the Wedge Narrow</h3>
+
+<p>Build the workflow around:</p>
+
+<pre><code>Manual QA session → AI guidance → evidence → bug report → Playwright draft</code></pre>
+
+<p>This is more defensible than a generic AI browser agent.</p>
+
+<hr>
+
+<h2>20. First AI-Agent Build Prompt</h2>
+
+<p>Use this prompt with an AI coding agent to start implementation:</p>
+
+<pre><code>Build an MVP Chrome Extension called QA Copilot.
+
+Goal:
+Create a Manifest V3 Chrome extension with a side panel that helps manual QA testers analyze the current web page, record exploratory testing actions, generate manual test cases, generate bug reports, and export Playwright TypeScript draft tests.
+
+Tech stack:
+- TypeScript
+- React for side panel
+- Chrome Extension Manifest V3
+- Content script for DOM scanning and event recording
+- Background service worker for session state and message routing
+- Node/TypeScript backend stub for AI endpoints, or mock AI responses for first local version
+
+MVP features:
+1. Side panel opens from extension icon.
+2. Content script scans current page and returns compact page summary:
+   - url, title, headings, forms, inputs, buttons, links, tables, dialogs, validation messages
+   - interactable element map with selector candidates
+3. SPA route observer detects pushState, replaceState, popstate, and hashchange.
+4. Recorder captures clicks, text input with sensitive masking, selects, checkbox/radio changes, and navigation.
+5. Session timeline displays recorded actions.
+6. Generate test cases from current page summary. Use a deterministic mock generator first if no LLM key is configured.
+7. Generate bug report from session timeline, screenshot placeholder, console errors, network failures, and user note.
+8. Generate Playwright TypeScript draft from recorded actions.
+9. Export artifacts as Markdown, JSON, and .spec.ts files.
+10. Implement security defaults:
+   - mask password/token/secret fields
+   - do not capture request/response bodies
+   - require user start/stop recording
+   - label generated output as draft
+
+Acceptance criteria:
+- Extension loads in Chrome unpacked mode.
+- Side panel shows current page summary.
+- User can start recording, click/type on page, stop recording, and see timeline.
+- User can export session JSON.
+- User can generate a Markdown test case document.
+- User can generate a Markdown bug report.
+- User can generate a Playwright .spec.ts draft.
+- Generated selectors prefer data-testid, data-test, role/name, aria-label, label, text, then CSS fallback.
+- No sensitive input values from password fields are saved.</code></pre>
+
+<hr>
+
+<h2>21. Human-Readable Summary</h2>
+
+<p>QA Copilot should start as a practical assistant for manual testers, not a magic autonomous QA replacement.</p>
+
+<p>The first version should help a tester:</p>
+
+<p>1. Open a web page.</p>
+<p>2. Ask what should be tested.</p>
+<p>3. Record their exploratory session.</p>
+<p>4. Capture evidence.</p>
+<p>5. Generate test cases.</p>
+<p>6. Generate a bug report.</p>
+<p>7. Convert useful flows into Playwright drafts.</p>
+
+<p>The strongest product wedge is the combination of <strong>manual QA workflow capture</strong> plus <strong>AI-generated test/evidence artifacts</strong> inside the browser.</p>
+
+</main>
+</body>
+</html>
