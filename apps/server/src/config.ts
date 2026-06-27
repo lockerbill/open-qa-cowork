@@ -1,6 +1,9 @@
+import { parseLogLevel, type LogLevel } from './logging/logger.js';
+
 /** Server configuration sourced from environment variables. */
 export interface Config {
   port: number;
+  logLevel: LogLevel;
   provider: 'anthropic' | 'openai' | 'local' | 'openrouter';
   anthropic: { apiKey: string; model: string };
   openai: { apiKey: string; model: string };
@@ -12,6 +15,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const provider = (env.LLM_PROVIDER ?? 'anthropic').toLowerCase();
   return {
     port: Number(env.PORT ?? 8787),
+    logLevel: parseLogLevel(env.LOG_LEVEL),
     provider:
       provider === 'openai'
         ? 'openai'

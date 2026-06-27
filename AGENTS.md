@@ -115,6 +115,13 @@ form, e.g. `anthropic/claude-sonnet-4-6`). `openai.ts`, `local.ts`, and `openrou
 share `openai-compatible.ts` for the request/parse logic. No extension changes are needed
 to switch providers — provider selection is server-side.
 
+Logging is leveled via `LOG_LEVEL` (`error|warn|info|debug`, default `info`) using pino
+(`logging/logger.ts`). Every LLM call is traced by the `LoggingProvider` decorator
+(`llm/logging-provider.ts`) — metadata (provider/model/tokens/latency) at `info`, full
+redacted prompt/response bodies at `debug`. A request-id (`http/request-id.ts`, propagated
+via AsyncLocalStorage) ties each inbound request to its LLM call. API keys/headers are never
+logged.
+
 ## Agent Playbook
 
 ### Adding a new generation endpoint

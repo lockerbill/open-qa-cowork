@@ -9,6 +9,8 @@ import {
   testCasesSchema,
 } from './http/schemas.js';
 import { artifactId, parseJsonLoose, stripFences } from './http/util.js';
+import { requestIdMiddleware } from './http/request-id.js';
+import { defaultLogger, type Logger } from './logging/logger.js';
 import {
   analyzeSystem,
   analyzeUser,
@@ -22,10 +24,11 @@ import {
 import { ZodError } from 'zod';
 
 /** Build the Express app with an injected LLM provider (tests pass a mock). */
-export function createApp(provider: LLMProvider): express.Express {
+export function createApp(provider: LLMProvider, logger: Logger = defaultLogger()): express.Express {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '4mb' }));
+  app.use(requestIdMiddleware(logger));
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true, provider: provider.name });
@@ -136,7 +139,7 @@ export function createApp(provider: LLMProvider): express.Express {
       res.status(err.status).json({ error: err.message });
       return;
     }
-    console.error('[server] unhandled error', err);
+    logger.error({ event: 'server.error', err }, 'unhandled error');
     res.status(500).json({ error: (err as Error).message ?? 'Internal error' });
   });
 

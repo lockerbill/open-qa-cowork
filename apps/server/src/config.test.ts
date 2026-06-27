@@ -53,6 +53,18 @@ describe('loadConfig', () => {
   it('normalizes an unknown provider to anthropic', () => {
     expect(loadConfig({ LLM_PROVIDER: 'bogus' }).provider).toBe('anthropic');
   });
+
+  it('defaults the log level to info', () => {
+    expect(loadConfig({}).logLevel).toBe('info');
+  });
+
+  it('reads a valid LOG_LEVEL', () => {
+    expect(loadConfig({ LOG_LEVEL: 'debug' }).logLevel).toBe('debug');
+  });
+
+  it('clamps an unknown LOG_LEVEL to info', () => {
+    expect(loadConfig({ LOG_LEVEL: 'bogus' }).logLevel).toBe('info');
+  });
 });
 
 describe('createProvider', () => {
