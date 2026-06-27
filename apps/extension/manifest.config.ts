@@ -1,0 +1,36 @@
+import { defineManifest } from '@crxjs/vite-plugin';
+
+/**
+ * MV3 manifest (spec §15). Minimum-viable permissions; no broad `<all_urls>`.
+ * The static content script targets localhost (dev + the E2E fixture). Other
+ * origins are added at runtime through the options page, which requests an
+ * optional host permission and registers the content script for that origin.
+ */
+export default defineManifest({
+  manifest_version: 3,
+  name: 'QA Copilot',
+  version: '0.1.0',
+  description: 'AI pair-tester for manual QA: analyze pages, record flows, generate tests & bug reports.',
+  action: { default_title: 'Open QA Copilot' },
+  background: { service_worker: 'src/background/index.ts', type: 'module' },
+  side_panel: { default_path: 'src/sidepanel/index.html' },
+  options_page: 'src/options/index.html',
+  content_scripts: [
+    {
+      matches: ['http://localhost/*', 'http://127.0.0.1/*'],
+      js: ['src/content/index.ts'],
+      run_at: 'document_idle',
+      all_frames: false,
+    },
+  ],
+  permissions: ['activeTab', 'scripting', 'sidePanel', 'storage', 'tabs'],
+  host_permissions: ['http://localhost/*', 'http://127.0.0.1/*'],
+  // optional_host_permissions is valid MV3 but missing from crxjs's types.
+  ...({ optional_host_permissions: ['https://*/*', 'http://*/*'] } as Record<string, unknown>),
+  web_accessible_resources: [
+    {
+      resources: ['injected.js'],
+      matches: ['http://localhost/*', 'http://127.0.0.1/*'],
+    },
+  ],
+});

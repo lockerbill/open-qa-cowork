@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Create Purchase Order</title>
+  </head>
+  <body>
+    <h1>Create Purchase Order</h1>
+    <main id="view">
+      <form id="po-form">
+        <label for="supplier">Supplier</label>
+        <input id="supplier" name="supplier" data-testid="supplier-input" />
+
+        <label for="qty">Quantity</label>
+        <input id="qty" name="qty" type="number" required />
+
+        <label for="pw">Password</label>
+        <input id="pw" name="password" type="password" />
+
+        <label for="terms">Accept terms</label>
+        <input id="terms" type="checkbox" />
+
+        <button type="submit" data-testid="submit-order">Submit</button>
+        <button type="button" id="cancel">Cancel</button>
+      </form>
+      <div id="msg" role="alert" class="error" hidden>Release date is required</div>
+    </main>
+
+    <nav>
+      <button id="go-summary" data-testid="nav-summary">Go to summary</button>
+    </nav>
+
+    <script>
+      // Show a validation message on submit (no real navigation).
+      document.getElementById('po-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        document.getElementById('msg').hidden = false;
+      });
+      // SPA route change via History API (spec §9.3).
+      document.getElementById('go-summary').addEventListener('click', () => {
+        history.pushState({}, '', '/orders/summary');
+        document.querySelector('h1').textContent = 'Order Summary';
+      });
+    </script>
+  </body>
+</html>
