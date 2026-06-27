@@ -82,7 +82,7 @@ apps/extension/         MV3 Chrome extension (Vite + @crxjs + React 18)
 
 apps/server/            Thin Express proxy
   src/app.ts              createApp(provider) — DI; the 4 generation routes
-  src/llm/                Provider-agnostic gateway (anthropic.ts, openai.ts, factory)
+  src/llm/                Provider-agnostic gateway (anthropic.ts, openai.ts, local.ts, factory)
   src/redaction/guard.ts  Defense-in-depth re-redaction + untrusted-data wrapping
   src/prompts/            Layered-context prompt builders
   src/http/               zod schemas + JSON parsing helpers
@@ -107,7 +107,11 @@ Node ≥ 20.
 | Extension E2E | `pnpm --filter @qa-copilot/extension test:e2e` (run `build` first; `playwright install chromium` once) |
 
 Server config: copy `apps/server/.env.example` → `apps/server/.env`, set
-`LLM_PROVIDER` (`anthropic`|`openai`) and the matching API key.
+`LLM_PROVIDER` (`anthropic`|`openai`|`local`) and the matching settings. For `local`,
+set `LOCAL_BASE_URL` (any OpenAI-compatible endpoint, including the `/v1` path — e.g.
+`http://localhost:11434/v1` for Ollama) and `LOCAL_MODEL`; `LOCAL_API_KEY` is optional.
+`openai.ts` and `local.ts` share `openai-compatible.ts` for the request/parse logic. No
+extension changes are needed to use a local model — provider selection is server-side.
 
 ## Agent Playbook
 

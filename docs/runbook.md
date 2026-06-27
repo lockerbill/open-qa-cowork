@@ -24,9 +24,13 @@ cp apps/server/.env.example apps/server/.env   # then edit, see below
 `.env` (server, gitignored):
 
 ```ini
-LLM_PROVIDER=anthropic            # anthropic | openai
+LLM_PROVIDER=anthropic            # anthropic | openai | local
 ANTHROPIC_API_KEY=sk-ant-...      # or OPENAI_API_KEY=sk-... when provider=openai
 ANTHROPIC_MODEL=claude-sonnet-4-6 # optional override
+# Local OpenAI-compatible model (Ollama, LM Studio, llama.cpp, vLLM...) when provider=local:
+# LOCAL_BASE_URL=http://localhost:11434/v1   # must include the /v1 path
+# LOCAL_MODEL=llama3.1
+# LOCAL_API_KEY=                             # usually blank
 PORT=8787                         # must match the extension's default backend URL
 ```
 

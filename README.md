@@ -13,7 +13,7 @@ and the implementation plan that produced this code in
 | --- | --- |
 | `packages/shared` | Domain types, the selector-priority ladder, redaction, and deterministic Playwright templating. Pure + unit-tested. |
 | `apps/extension` | MV3 Chrome extension: React side panel, content script (DOM scanner / recorder / SPA route + console/network capture), background service worker. |
-| `apps/server` | Thin Node/Express proxy: provider-agnostic LLM gateway (Anthropic + OpenAI), redaction guard, generation endpoints. No database (MVP 1). |
+| `apps/server` | Thin Node/Express proxy: provider-agnostic LLM gateway (Anthropic, OpenAI, or a local OpenAI-compatible model), redaction guard, generation endpoints. No database (MVP 1). |
 
 State lives in `chrome.storage.local` and file exports — there is no DB, queue,
 or object storage in MVP 1 (those are MVP 3 in the spec).
@@ -21,7 +21,7 @@ or object storage in MVP 1 (those are MVP 3 in the spec).
 ## Prerequisites
 
 - Node ≥ 20, pnpm 11
-- An Anthropic or OpenAI API key (generation endpoints require a real LLM)
+- An Anthropic or OpenAI API key, **or** a local OpenAI-compatible LLM server (Ollama, LM Studio, llama.cpp, vLLM...) — generation endpoints require a real LLM
 
 ## Setup
 
@@ -30,7 +30,9 @@ pnpm install
 
 # Configure the server
 cp apps/server/.env.example apps/server/.env
-# edit apps/server/.env and set ANTHROPIC_API_KEY (or LLM_PROVIDER=openai + OPENAI_API_KEY)
+# edit apps/server/.env and set ANTHROPIC_API_KEY
+#   (or LLM_PROVIDER=openai + OPENAI_API_KEY,
+#    or LLM_PROVIDER=local + LOCAL_BASE_URL=http://localhost:11434/v1 + LOCAL_MODEL=llama3.1)
 ```
 
 ## Run

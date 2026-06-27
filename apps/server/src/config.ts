@@ -1,16 +1,17 @@
 /** Server configuration sourced from environment variables. */
 export interface Config {
   port: number;
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'local';
   anthropic: { apiKey: string; model: string };
   openai: { apiKey: string; model: string };
+  local: { baseUrl: string; model: string; apiKey: string };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const provider = (env.LLM_PROVIDER ?? 'anthropic').toLowerCase();
   return {
     port: Number(env.PORT ?? 8787),
-    provider: provider === 'openai' ? 'openai' : 'anthropic',
+    provider: provider === 'openai' ? 'openai' : provider === 'local' ? 'local' : 'anthropic',
     anthropic: {
       apiKey: env.ANTHROPIC_API_KEY ?? '',
       model: env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6',
@@ -18,6 +19,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     openai: {
       apiKey: env.OPENAI_API_KEY ?? '',
       model: env.OPENAI_MODEL ?? 'gpt-4o',
+    },
+    local: {
+      baseUrl: env.LOCAL_BASE_URL ?? '',
+      model: env.LOCAL_MODEL ?? '',
+      apiKey: env.LOCAL_API_KEY ?? '',
     },
   };
 }
