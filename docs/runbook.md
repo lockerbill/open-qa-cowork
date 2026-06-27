@@ -24,9 +24,12 @@ cp apps/server/.env.example apps/server/.env   # then edit, see below
 `.env` (server, gitignored):
 
 ```ini
-LLM_PROVIDER=anthropic            # anthropic | openai | local
+LLM_PROVIDER=anthropic            # anthropic | openai | local | openrouter
 ANTHROPIC_API_KEY=sk-ant-...      # or OPENAI_API_KEY=sk-... when provider=openai
 ANTHROPIC_MODEL=claude-sonnet-4-6 # optional override
+# OpenRouter (OpenAI-compatible gateway to many models) when provider=openrouter:
+# OPENROUTER_API_KEY=sk-or-...
+# OPENROUTER_MODEL=anthropic/claude-sonnet-4-6   # required, vendor/model form
 # Local OpenAI-compatible model (Ollama, LM Studio, llama.cpp, vLLM...) when provider=local:
 # LOCAL_BASE_URL=http://localhost:11434/v1   # must include the /v1 path
 # LOCAL_MODEL=llama3.1

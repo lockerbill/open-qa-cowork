@@ -30,6 +30,26 @@ describe('loadConfig', () => {
     });
   });
 
+  it('recognizes the openrouter provider and populates its config', () => {
+    const config = loadConfig({
+      LLM_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'sk-or-key',
+      OPENROUTER_MODEL: 'anthropic/claude-sonnet-4-6',
+    });
+    expect(config.provider).toBe('openrouter');
+    expect(config.openrouter).toEqual({
+      apiKey: 'sk-or-key',
+      model: 'anthropic/claude-sonnet-4-6',
+    });
+  });
+
+  it('defaults the openrouter block to empty strings when unset', () => {
+    expect(loadConfig({ LLM_PROVIDER: 'openrouter' }).openrouter).toEqual({
+      apiKey: '',
+      model: '',
+    });
+  });
+
   it('normalizes an unknown provider to anthropic', () => {
     expect(loadConfig({ LLM_PROVIDER: 'bogus' }).provider).toBe('anthropic');
   });
@@ -43,5 +63,14 @@ describe('createProvider', () => {
       LOCAL_MODEL: 'llama3.1',
     });
     expect(createProvider(config).name).toBe('local');
+  });
+
+  it('builds a provider named "openrouter" for the openrouter config', () => {
+    const config = loadConfig({
+      LLM_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'sk-or-key',
+      OPENROUTER_MODEL: 'anthropic/claude-sonnet-4-6',
+    });
+    expect(createProvider(config).name).toBe('openrouter');
   });
 });

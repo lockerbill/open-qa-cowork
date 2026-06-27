@@ -107,11 +107,13 @@ Node ≥ 20.
 | Extension E2E | `pnpm --filter @qa-copilot/extension test:e2e` (run `build` first; `playwright install chromium` once) |
 
 Server config: copy `apps/server/.env.example` → `apps/server/.env`, set
-`LLM_PROVIDER` (`anthropic`|`openai`|`local`) and the matching settings. For `local`,
-set `LOCAL_BASE_URL` (any OpenAI-compatible endpoint, including the `/v1` path — e.g.
-`http://localhost:11434/v1` for Ollama) and `LOCAL_MODEL`; `LOCAL_API_KEY` is optional.
-`openai.ts` and `local.ts` share `openai-compatible.ts` for the request/parse logic. No
-extension changes are needed to use a local model — provider selection is server-side.
+`LLM_PROVIDER` (`anthropic`|`openai`|`local`|`openrouter`) and the matching settings. For
+`local`, set `LOCAL_BASE_URL` (any OpenAI-compatible endpoint, including the `/v1` path —
+e.g. `http://localhost:11434/v1` for Ollama) and `LOCAL_MODEL`; `LOCAL_API_KEY` is
+optional. For `openrouter`, set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` (vendor/model
+form, e.g. `anthropic/claude-sonnet-4-6`). `openai.ts`, `local.ts`, and `openrouter.ts`
+share `openai-compatible.ts` for the request/parse logic. No extension changes are needed
+to switch providers — provider selection is server-side.
 
 ## Agent Playbook
 
