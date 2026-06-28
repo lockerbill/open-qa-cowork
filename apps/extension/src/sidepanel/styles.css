@@ -188,6 +188,28 @@ input[type='text'] {
   font-size: 12px;
 }
 
+.shots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shot {
+  margin: 0;
+}
+
+.thumb {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.shot figcaption {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
 .draft-tag {
   font-size: 10px;
   background: #fff8c5;

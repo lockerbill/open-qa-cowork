@@ -144,13 +144,26 @@ async function handleContentMessage(msg: ContentToBackground): Promise<void> {
 
 // --- panel -> background --------------------------------------------------
 
-async function captureScreenshot(): Promise<void> {
+async function captureScreenshot(): Promise<{ ok: boolean; error?: string }> {
+  const tab = await activeTab();
+  const origin = originOf(tab?.url);
+  if (!(await isAllowed(origin))) {
+    return { ok: false, error: 'Enable QA Copilot on this site first (use the banner), then retry.' };
+  }
+
   let dataUrl: string;
   try {
-    dataUrl = await chrome.tabs.captureVisibleTab({ format: 'png' });
+    // Pass the tab's window explicitly — capturing from the side-panel /
+    // service-worker context has no reliable "current window".
+    dataUrl = await chrome.tabs.captureVisibleTab(tab!.windowId, { format: 'png' });
   } catch (err) {
+    const raw = chrome.runtime.lastError?.message ?? (err as Error)?.message ?? 'Screenshot failed';
+    // captureVisibleTab needs <all_urls> / activeTab; a per-origin grant isn't enough.
+    const message = /all_urls|activeTab/i.test(raw)
+      ? `${raw} — set Site access to "On all sites" in extension settings.`
+      : raw;
     console.debug('[QA Copilot] screenshot failed', err);
-    return;
+    return { ok: false, error: message };
   }
   await updateSession((s) => {
     const evidence: EvidenceItem = {
@@ -162,6 +175,7 @@ async function captureScreenshot(): Promise<void> {
     };
     s.evidence.push(evidence);
   });
+  return { ok: true };
 }
 
 async function startRecording(): Promise<void> {
@@ -220,10 +234,15 @@ async function handlePanelMessage(
       sendResponse({ ok: true });
       broadcast();
       return;
-    case 'CAPTURE_SCREENSHOT':
-      await captureScreenshot();
+    case 'CAPTURE_SCREENSHOT': {
+      const result = await captureScreenshot();
+      sendResponse(result);
+      if (result.ok) broadcast();
+      return;
+    }
+    case 'OPEN_EXTENSION_SETTINGS':
+      await chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
       sendResponse({ ok: true });
-      broadcast();
       return;
     case 'ADD_ALLOWLIST_ORIGIN':
       sendResponse({ ok: await addAllowlistOrigin(msg.origin) });

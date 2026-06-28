@@ -207,6 +207,8 @@ function PageTab({ state, settings }: { state: PanelState; settings: Settings | 
 
 function SessionTab({ state, onChange }: { state: PanelState; onChange: () => void }) {
   const { session, recording } = state;
+  const [err, setErr] = useState('');
+  const screenshots = session.evidence.filter((e) => e.type === 'screenshot' && e.dataUrl);
   return (
     <div className="section">
       <div className="row">
@@ -219,7 +221,18 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
             Start recording
           </button>
         )}
-        <button className="ghost" onClick={() => bg.captureScreenshot()}>
+        <button
+          className="ghost"
+          onClick={async () => {
+            const r = await bg.captureScreenshot();
+            if (!r.ok) {
+              setErr(r.error ?? 'Screenshot failed');
+            } else {
+              setErr('');
+              onChange();
+            }
+          }}
+        >
           Screenshot
         </button>
         <button className="ghost" onClick={async () => (await bg.clearSession(), onChange())}>
@@ -241,6 +254,15 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
         <span className="chip">{session.networkFailures.length} network</span>
       </div>
 
+      {err && (
+        <div className="row">
+          <span className="err">{err}</span>
+          <button className="ghost" onClick={() => bg.openExtensionSettings()}>
+            Open extension settings
+          </button>
+        </div>
+      )}
+
       <h3>Timeline</h3>
       {session.events.length === 0 ? (
         <p className="muted">No actions recorded yet.</p>
@@ -255,6 +277,22 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
             </li>
           ))}
         </ul>
+      )}
+
+      {screenshots.length > 0 && (
+        <>
+          <h3>Screenshots</h3>
+          <div className="shots">
+            {screenshots.map((e) => (
+              <figure key={e.id} className="shot">
+                <img className="thumb" src={e.dataUrl} alt={`Screenshot ${e.capturedAt}`} />
+                <figcaption className="muted">
+                  {new Date(e.capturedAt).toLocaleTimeString()}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </>
       )}
 
       {session.consoleErrors.length > 0 && (

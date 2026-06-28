@@ -33,6 +33,7 @@ export type PanelToBackground =
   | { type: 'STOP_RECORDING' }
   | { type: 'CLEAR_SESSION' }
   | { type: 'CAPTURE_SCREENSHOT' }
+  | { type: 'OPEN_EXTENSION_SETTINGS' }
   | { type: 'GET_SETTINGS' }
   | { type: 'SAVE_SETTINGS'; settings: Settings }
   | { type: 'ADD_ALLOWLIST_ORIGIN'; origin: string };

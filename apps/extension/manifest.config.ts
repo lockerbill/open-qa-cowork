@@ -9,7 +9,7 @@ import { defineManifest } from '@crxjs/vite-plugin';
 export default defineManifest({
   manifest_version: 3,
   name: 'QA Copilot',
-  version: '0.1.0',
+  version: '0.1.2',
   description: 'AI pair-tester for manual QA: analyze pages, record flows, generate tests & bug reports.',
   action: { default_title: 'Open QA Copilot' },
   background: { service_worker: 'src/background/index.ts', type: 'module' },

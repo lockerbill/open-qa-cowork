@@ -13,6 +13,9 @@ export const scanActiveTab = () => sendToBackground({ type: 'SCAN_ACTIVE_TAB' })
 export const startRecording = () => sendToBackground({ type: 'START_RECORDING' });
 export const stopRecording = () => sendToBackground({ type: 'STOP_RECORDING' });
 export const clearSession = () => sendToBackground({ type: 'CLEAR_SESSION' });
-export const captureScreenshot = () => sendToBackground({ type: 'CAPTURE_SCREENSHOT' });
+export const captureScreenshot = () =>
+  sendToBackground<{ ok: boolean; error?: string }>({ type: 'CAPTURE_SCREENSHOT' });
+export const openExtensionSettings = () =>
+  sendToBackground({ type: 'OPEN_EXTENSION_SETTINGS' });
 export const addAllowlistOrigin = (origin: string) =>
   sendToBackground<{ ok: boolean }>({ type: 'ADD_ALLOWLIST_ORIGIN', origin });
