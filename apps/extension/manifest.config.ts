@@ -11,7 +11,21 @@ export default defineManifest({
   name: 'QA Copilot',
   version: '0.1.2',
   description: 'AI pair-tester for manual QA: analyze pages, record flows, generate tests & bug reports.',
-  action: { default_title: 'Open QA Copilot' },
+  icons: {
+    16: 'icons/icon-16.png',
+    32: 'icons/icon-32.png',
+    48: 'icons/icon-48.png',
+    128: 'icons/icon-128.png',
+  },
+  action: {
+    default_title: 'Open QA Copilot',
+    default_icon: {
+      16: 'icons/icon-16.png',
+      32: 'icons/icon-32.png',
+      48: 'icons/icon-48.png',
+      128: 'icons/icon-128.png',
+    },
+  },
   background: { service_worker: 'src/background/index.ts', type: 'module' },
   side_panel: { default_path: 'src/sidepanel/index.html' },
   options_page: 'src/options/index.html',
