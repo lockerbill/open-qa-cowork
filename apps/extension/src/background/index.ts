@@ -80,6 +80,65 @@ async function sendToActiveContent(message: unknown): Promise<void> {
   }
 }
 
+/**
+ * Inject the declared content-script bundle into a specific tab. Used both when
+ * allowlisting an origin (immediate capture of already-open tabs) and when the
+ * active tab changes to a tab that has no content script yet. The loader
+ * dynamic-imports its hashed chunk, web-accessible on granted origins via the
+ * vite WAR transform. Returns false (and swallows) if injection isn't possible.
+ */
+async function injectContentScript(tabId: number): Promise<boolean> {
+  const declared = chrome.runtime.getManifest().content_scripts?.[0]?.js ?? [];
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: declared });
+    return true;
+  } catch (err) {
+    console.debug('[QA Copilot] inject failed', tabId, err);
+    return false;
+  }
+}
+
+// Pages we can never scan; skip them rather than clearing/injecting.
+const INTERNAL_URL = /^(chrome|chrome-extension|edge|about|devtools|view-source):/i;
+
+// Dedupe key (`tabId|url`) so rapid/duplicate tab + load events don't re-scan
+// the same page repeatedly. Reset to null to force the next refresh.
+let lastRefreshKey: string | null = null;
+
+/**
+ * React to the active tab changing (tab switch, window focus, or a load
+ * completing in the active tab). Keeps the side panel showing the CURRENT tab
+ * instead of a stale global page model: re-scans allowlisted tabs, and clears
+ * the model for tabs we can't read so the panel falls back to the allowlist
+ * banner rather than a wrong URL.
+ */
+async function refreshActiveTab(): Promise<void> {
+  const tab = await activeTab();
+  if (tab?.id == null || !tab.url || INTERNAL_URL.test(tab.url)) return;
+
+  const key = `${tab.id}|${tab.url}`;
+  if (key === lastRefreshKey) return;
+  lastRefreshKey = key;
+
+  const origin = originOf(tab.url);
+  if (await isAllowed(origin)) {
+    // Ask the content script to re-scan; if it isn't present yet, inject it —
+    // content init() auto-scans on load. Either path emits PAGE_MODEL ->
+    // savePageModel + broadcast, so no explicit broadcast is needed here.
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
+    } catch {
+      await injectContentScript(tab.id);
+    }
+    return;
+  }
+
+  // Not allowed: drop the stale model so the panel shows "No page scanned" plus
+  // this origin's allowlist banner instead of a previous tab's URL.
+  await savePageModel(null);
+  broadcast();
+}
+
 async function buildState(): Promise<PanelState> {
   const [session, pageModel] = await Promise.all([getSession(), getPageModel()]);
   const tab = await activeTab();
@@ -280,22 +339,18 @@ async function addAllowlistOrigin(origin: string): Promise<boolean> {
   // registerContentScripts only injects on future loads. Inject into any
   // already-open tab(s) on this origin so the current page is captured without
   // a manual reload. Query by URL pattern (not just the active tab) so the
-  // options-page flow works too. The loader dynamic-imports its hashed chunk,
-  // which is web-accessible on this origin thanks to the vite WAR transform.
+  // options-page flow works too.
   try {
     const tabs = await chrome.tabs.query({ url: pattern });
     await Promise.all(
-      tabs
-        .filter((t) => t.id != null)
-        .map((t) =>
-          chrome.scripting
-            .executeScript({ target: { tabId: t.id! }, files: declared })
-            .catch((err) => console.debug('[QA Copilot] inject failed', t.id, err)),
-        ),
+      tabs.filter((t) => t.id != null).map((t) => injectContentScript(t.id!)),
     );
   } catch (err) {
     console.debug('[QA Copilot] immediate inject failed', err);
   }
+  // A freshly-allowlisted tab may be the active one; let the next active-tab
+  // refresh re-evaluate it rather than being skipped by the dedupe guard.
+  lastRefreshKey = null;
   return true;
 }
 
@@ -313,4 +368,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   void handlePanelMessage(msg as PanelToBackground, sendResponse);
   return true; // async sendResponse
+});
+
+// --- active-tab tracking --------------------------------------------------
+// The panel renders one global page model; without these listeners it would
+// keep showing a previous tab's URL when the user switches tabs/windows.
+chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) void refreshActiveTab();
+});
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (tab.active && changeInfo.status === 'complete') void refreshActiveTab();
 });
