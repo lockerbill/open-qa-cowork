@@ -257,6 +257,26 @@ async function addAllowlistOrigin(origin: string): Promise<boolean> {
   } catch (err) {
     console.debug('[QA Copilot] registerContentScripts failed (may already exist)', err);
   }
+
+  // registerContentScripts only injects on future loads. Inject into any
+  // already-open tab(s) on this origin so the current page is captured without
+  // a manual reload. Query by URL pattern (not just the active tab) so the
+  // options-page flow works too. The loader dynamic-imports its hashed chunk,
+  // which is web-accessible on this origin thanks to the vite WAR transform.
+  try {
+    const tabs = await chrome.tabs.query({ url: pattern });
+    await Promise.all(
+      tabs
+        .filter((t) => t.id != null)
+        .map((t) =>
+          chrome.scripting
+            .executeScript({ target: { tabId: t.id! }, files: declared })
+            .catch((err) => console.debug('[QA Copilot] inject failed', t.id, err)),
+        ),
+    );
+  } catch (err) {
+    console.debug('[QA Copilot] immediate inject failed', err);
+  }
   return true;
 }
 

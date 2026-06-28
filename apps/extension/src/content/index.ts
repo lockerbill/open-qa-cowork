@@ -10,6 +10,16 @@ import type { BackgroundToContent, ContentToBackground } from '../shared/message
 import { scanPage } from './scanner.js';
 import { createRecorder } from './recorder.js';
 
+// Idempotency: the loader may be injected via executeScript (immediate capture
+// on an already-open tab) and also registered for future loads. Initialize at
+// most once per document so listeners aren't double-registered.
+const w = window as unknown as { __qaCopilotContentLoaded?: boolean };
+if (!w.__qaCopilotContentLoaded) {
+  w.__qaCopilotContentLoaded = true;
+  init();
+}
+
+function init(): void {
 const SESSION_ID = `session_${Date.now().toString(36)}`;
 let lastUrl = location.href;
 
@@ -95,3 +105,4 @@ chrome.runtime.onMessage.addListener((msg: BackgroundToContent) => {
 injectPageScript();
 // Initial scan so the side panel has context as soon as it opens.
 scanAndSend();
+}

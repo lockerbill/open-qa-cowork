@@ -27,6 +27,10 @@ export default defineManifest({
   host_permissions: ['http://localhost/*', 'http://127.0.0.1/*'],
   // optional_host_permissions is valid MV3 but missing from crxjs's types.
   ...({ optional_host_permissions: ['https://*/*', 'http://*/*'] } as Record<string, unknown>),
+  // NOTE: the final WAR `matches` are broadened to the optional origins
+  // (https://*/* + http://*/*) by the `broadenWarMatches` plugin in
+  // vite.config.ts — these localhost-only matches are not the built output.
+  // crxjs also auto-adds the hashed content-script chunk to this list at build.
   web_accessible_resources: [
     {
       resources: ['injected.js'],
