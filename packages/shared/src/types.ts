@@ -122,8 +122,10 @@ export interface ActionEvent {
   targetLabel?: string;
   /** Describes the value semantically (e.g. "supplier name") — never raw secrets. */
   valueType?: string;
-  /** Literal value, present only for non-sensitive inputs. */
+  /** Literal/underlying value, present only for non-sensitive inputs. */
   value?: string;
+  /** Human-readable selected text (e.g. visible option label), when it differs from `value`. */
+  valueText?: string;
   selectorCandidates?: string[];
   timestamp: string;
   /** Observed outcome, e.g. "Validation error appeared". */

@@ -272,7 +272,11 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
             <li key={e.id}>
               <span className="type">{e.type}</span>
               {e.targetLabel ? ` → ${e.targetLabel}` : ''}
-              {e.valueType === 'sensitive' ? ' (value hidden)' : e.value ? `: ${e.value}` : ''}
+              {e.valueType === 'sensitive'
+                ? ' (value hidden)'
+                : (e.valueText ?? e.value)
+                  ? `: ${e.valueText ?? e.value}`
+                  : ''}
               {e.resultSummary && <div className="muted">{e.resultSummary}</div>}
             </li>
           ))}

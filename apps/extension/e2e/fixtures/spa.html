@@ -20,6 +20,35 @@
         <label for="terms">Accept terms</label>
         <input id="terms" type="checkbox" />
 
+        <span id="region-label">Region</span>
+        <div
+          id="region"
+          role="combobox"
+          aria-controls="region-list"
+          aria-expanded="false"
+          aria-labelledby="region-label"
+          tabindex="0"
+          data-testid="region-combobox"
+        >
+          Select…
+        </div>
+        <ul id="region-list" role="listbox" hidden>
+          <li role="option" data-value="n">North</li>
+          <li role="option" data-value="s">South</li>
+        </ul>
+
+        <label for="notes">Delivery notes</label>
+        <textarea id="notes" name="notes"></textarea>
+
+        <span
+          id="add-note"
+          class="icon-btn"
+          aria-label="Add note"
+          tabindex="0"
+          data-testid="add-note"
+          >＋</span
+        >
+
         <button type="submit" data-testid="submit-order">Submit</button>
         <button type="button" id="cancel">Cancel</button>
       </form>
@@ -35,6 +64,26 @@
       document.getElementById('po-form').addEventListener('submit', (e) => {
         e.preventDefault();
         document.getElementById('msg').hidden = false;
+      });
+      // Custom ARIA dropdown (mirrors React Select / MUI: no native change).
+      const combo = document.getElementById('region');
+      const list = document.getElementById('region-list');
+      combo.addEventListener('click', () => {
+        const open = combo.getAttribute('aria-expanded') === 'true';
+        combo.setAttribute('aria-expanded', String(!open));
+        list.hidden = open;
+      });
+      list.addEventListener('click', (e) => {
+        const opt = e.target.closest('[role="option"]');
+        if (!opt) return;
+        combo.textContent = opt.textContent.trim();
+        combo.setAttribute('aria-expanded', 'false');
+        list.hidden = true;
+      });
+      // Non-button action icon (no role): appends the note on click.
+      document.getElementById('add-note').addEventListener('click', () => {
+        const notes = document.getElementById('notes');
+        notes.value = notes.value ? notes.value + '\n(added)' : '(added)';
       });
       // SPA route change via History API (spec §9.3).
       document.getElementById('go-summary').addEventListener('click', () => {

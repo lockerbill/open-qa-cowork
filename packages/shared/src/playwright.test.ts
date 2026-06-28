@@ -94,6 +94,76 @@ describe('buildPlaywrightSpec (spec §9.10)', () => {
     );
   });
 
+  it('selects a native option by its visible text', () => {
+    const spec = buildPlaywrightSpec(
+      session([
+        ev({
+          id: 'e1',
+          type: 'select',
+          valueType: 'option',
+          value: 's',
+          valueText: 'South',
+          selectorCandidates: ["getByLabel('Warehouse')"],
+        }),
+      ]),
+    );
+    expect(spec.content).toContain("await page.getByLabel('Warehouse').selectOption('South');");
+  });
+
+  it('drives a custom (ARIA) dropdown as a trigger click + option click', () => {
+    const spec = buildPlaywrightSpec(
+      session([
+        ev({
+          id: 'e1',
+          type: 'select',
+          valueType: 'aria-option',
+          value: 'ca',
+          valueText: 'Canada',
+          targetLabel: 'Country',
+          selectorCandidates: ["getByLabel('Country')"],
+        }),
+      ]),
+    );
+    expect(spec.content).toContain("await page.getByLabel('Country').click();");
+    expect(spec.content).toContain(
+      "await page.getByRole('option', { name: 'Canada' }).click();",
+    );
+  });
+
+  it('fills a custom date picker field with the recorded date', () => {
+    const spec = buildPlaywrightSpec(
+      session([
+        ev({
+          id: 'e1',
+          type: 'input',
+          valueType: 'date',
+          value: '2026-06-15',
+          selectorCandidates: ["getByLabel('Date of birth')"],
+        }),
+      ]),
+    );
+    expect(spec.content).toContain("await page.getByLabel('Date of birth').fill('2026-06-15');");
+  });
+
+  it('fills a multi-line textarea value as a single-line, parseable literal', () => {
+    const spec = buildPlaywrightSpec(
+      session([
+        ev({
+          id: 'e1',
+          type: 'input',
+          valueType: 'text',
+          value: 'line one\nline two',
+          selectorCandidates: ["getByLabel('Notes')"],
+        }),
+      ]),
+    );
+    expect(spec.content).toContain("await page.getByLabel('Notes').fill('line one\\nline two');");
+    // The generated step must not embed a raw newline (would break parsing).
+    const fillLine = spec.content.split('\n').find((l) => l.includes('.fill('));
+    expect(fillLine).toBeTruthy();
+    expect(fillLine).toContain('line one\\nline two');
+  });
+
   it('always produces a parseable import header', () => {
     const spec = buildPlaywrightSpec(session([]));
     expect(spec.content.startsWith("import { test, expect } from '@playwright/test';")).toBe(true);

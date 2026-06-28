@@ -82,15 +82,24 @@ test('records a flow without leaking secrets and tracks SPA navigation (spec §9
 
   await page.fill('#supplier', 'Acme Corp');
   await page.fill('#pw', 'hunter2');
+  await page.click('[data-testid="region-combobox"]'); // open custom dropdown
+  await page.click('#region-list [data-value="s"]'); // select "South"
+  await page.fill('#notes', 'Line A\nLine B'); // multi-line textarea
+  await page.click('[data-testid="add-note"]'); // non-button action icon (blurs textarea → change)
   await page.click('[data-testid="submit-order"]');
   await page.click('[data-testid="nav-summary"]'); // SPA pushState
 
-  // Wait until the navigation event (last action) has landed.
+  // Wait until both the navigation event and the deferred (250ms) icon click
+  // have landed, so every recorded action has flushed.
   await expect
     .poll(
       async () => {
         const r = await worker.evaluate(() => chrome.storage.local.get('session'));
-        return (r.session?.events ?? []).some((e: any) => e.type === 'navigation');
+        const evs = r.session?.events ?? [];
+        return (
+          evs.some((e: any) => e.type === 'navigation') &&
+          evs.some((e: any) => e.type === 'click' && e.targetLabel === 'Add note')
+        );
       },
       { timeout: 6000 },
     )
@@ -99,6 +108,19 @@ test('records a flow without leaking secrets and tracks SPA navigation (spec §9
   const { session } = await worker.evaluate(() => chrome.storage.local.get('session'));
   const events: any[] = session.events;
   expect(events.some((e) => e.type === 'input' && e.value === 'Acme Corp')).toBe(true);
+  // Custom ARIA dropdown selection is captured with the field label + visible text.
+  const region = events.find((e) => e.type === 'select' && e.valueType === 'aria-option');
+  expect(region).toBeTruthy();
+  expect(region.targetLabel).toBe('Region');
+  expect(region.valueText).toBe('South');
+  expect(region.value).toBe('s');
+  // Multi-line textarea is captured with newlines preserved and labelled from <label>.
+  const note = events.find((e) => e.type === 'input' && e.targetLabel === 'Delivery notes');
+  expect(note).toBeTruthy();
+  expect(note.value).toBe('Line A\nLine B');
+  // A non-button action icon (span, no role) is recorded as a click.
+  const icon = events.find((e) => e.type === 'click' && e.targetLabel === 'Add note');
+  expect(icon).toBeTruthy();
   const sensitive = events.find((e) => e.type === 'input' && e.valueType === 'sensitive');
   expect(sensitive).toBeTruthy();
   expect(sensitive.value).toBeUndefined();

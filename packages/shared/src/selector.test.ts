@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { rankSelectors, selectorStrings, isFragileLocator, bestStrategy } from './selector.js';
+import {
+  rankSelectors,
+  selectorStrings,
+  isFragileLocator,
+  bestStrategy,
+  escapeForSingleQuotes,
+} from './selector.js';
 
 describe('rankSelectors priority ladder (spec §9.10)', () => {
   it('orders all strategies best-first', () => {
@@ -79,5 +85,19 @@ describe('isFragileLocator', () => {
 describe('bestStrategy', () => {
   it('returns undefined when nothing is provided', () => {
     expect(bestStrategy({})).toBeUndefined();
+  });
+});
+
+describe('escapeForSingleQuotes', () => {
+  it('escapes backslashes and single quotes', () => {
+    expect(escapeForSingleQuotes("a\\b'c")).toBe("a\\\\b\\'c");
+  });
+
+  it('escapes newlines and carriage returns so multi-line values stay single-line literals', () => {
+    // A multi-line textarea value must not embed a literal newline in a single-quoted
+    // JS string, or the generated Playwright spec fails to parse.
+    expect(escapeForSingleQuotes('line1\nline2')).toBe('line1\\nline2');
+    expect(escapeForSingleQuotes('line1\r\nline2')).toBe('line1\\r\\nline2');
+    expect(escapeForSingleQuotes('line1\nline2')).not.toContain('\n');
   });
 });

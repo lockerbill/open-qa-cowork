@@ -56,6 +56,23 @@ export function associatedLabelText(el: Element): string | undefined {
   return undefined;
 }
 
+/**
+ * An editable, value-bearing control whose text content is *user data*, not a
+ * label: a <textarea>, a text-like <input>, or a contenteditable host. Its
+ * content must never be used as an accessible name (it would mislabel the field
+ * and leak typed/sensitive values).
+ */
+function isEditableField(el: Element): boolean {
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'textarea') return true;
+  if (tag === 'input') {
+    const type = (el.getAttribute('type') ?? 'text').toLowerCase();
+    return !['button', 'submit', 'reset', 'checkbox', 'radio'].includes(type);
+  }
+  const editable = el.getAttribute('contenteditable');
+  return editable === '' || editable === 'true';
+}
+
 /** Simplified accessible-name computation (aria-label > labelledby > label > text). */
 export function accessibleName(el: Element): string | undefined {
   const ariaLabel = el.getAttribute('aria-label')?.trim();
@@ -74,10 +91,147 @@ export function accessibleName(el: Element): string | undefined {
   const label = associatedLabelText(el);
   if (label) return label;
 
-  const text = el.textContent?.trim();
-  if (text && text.length <= 80) return text;
+  // Skip the element's own content for editable fields — it is user data, not a
+  // label, and could expose typed or sensitive values.
+  if (!isEditableField(el)) {
+    const text = el.textContent?.trim();
+    if (text && text.length <= 80) return text;
+  }
 
   return el.getAttribute('placeholder')?.trim() || el.getAttribute('title')?.trim() || undefined;
+}
+
+// --- Custom widget (ARIA) selection capture -------------------------------
+
+/** Roles whose click represents *selecting a value* (vs. an action click). */
+export const OPTION_ROLE_SELECTOR =
+  '[role="option"], [role="menuitemradio"], [role="menuitemcheckbox"]';
+
+/** Containers that hold the options/cells of an open custom widget popup. */
+const POPUP_SELECTOR =
+  '[role="listbox"], [role="menu"], [role="grid"], [role="tree"], [role="dialog"]';
+
+/** The visible text of a selected option (≤80 chars), or its accessible name. */
+export function optionValueText(option: Element): string | undefined {
+  const text = option.textContent?.trim();
+  if (text && text.length <= 80) return text;
+  return accessibleName(option);
+}
+
+/** The underlying value of an option (data-value / value / aria-valuenow), else its text. */
+export function optionRawValue(option: Element): string | undefined {
+  const raw =
+    option.getAttribute('data-value') ??
+    option.getAttribute('value') ??
+    option.getAttribute('aria-valuenow');
+  return raw?.trim() || optionValueText(option);
+}
+
+/** First element referenced by a space-separated id list (aria-controls/owns). */
+function firstReferenced(idList: string | null, doc: Document): Element | null {
+  if (!idList) return null;
+  for (const id of idList.trim().split(/\s+/)) {
+    const el = doc.getElementById(id);
+    if (el) return el;
+  }
+  return null;
+}
+
+/**
+ * Resolve the form control that owns a clicked option/cell, so its label —
+ * not the option text — names the field. Custom widgets (React Select, MUI,
+ * Radix, Headless UI) are ARIA-compliant, so we follow aria-controls/owns,
+ * aria-activedescendant, and the expanded trigger. Returns null when no
+ * owning control can be found (caller falls back to the option itself).
+ */
+export function resolveOwningControl(node: Element, doc: Document): Element | null {
+  // 1. Walk up the popup containers, matching either direction of reference.
+  let container: Element | null = node.closest(POPUP_SELECTOR);
+  while (container) {
+    const controlled = firstReferenced(
+      container.getAttribute('aria-controls') ?? container.getAttribute('aria-owns'),
+      doc,
+    );
+    if (controlled) return controlled;
+    if (container.id) {
+      const byRef = doc.querySelector(
+        `[aria-controls~="${cssEscape(container.id)}"], [aria-owns~="${cssEscape(container.id)}"]`,
+      );
+      if (byRef) return byRef;
+    }
+    container = container.parentElement?.closest(POPUP_SELECTOR) ?? null;
+  }
+  // 2. The clicked option is the active descendant of a combobox.
+  if (node.id) {
+    const byActive = doc.querySelector(`[aria-activedescendant="${cssEscape(node.id)}"]`);
+    if (byActive) return byActive;
+  }
+  // 3. An expanded combobox / popup trigger.
+  const expanded = doc.querySelector(
+    '[aria-expanded="true"][role="combobox"], [aria-expanded="true"][aria-haspopup]',
+  );
+  if (expanded) return expanded;
+  // 4. The focused control, if it is a field-like role.
+  const active = doc.activeElement;
+  if (active && ['combobox', 'button', 'textbox'].includes(getRole(active) ?? '')) return active;
+  return null;
+}
+
+// --- Click target resolution (semantic + Balanced heuristic) ---------------
+
+/** Elements whose click is unambiguously an action (carry the best label). */
+export const SEMANTIC_CLICK_SELECTOR =
+  'a, button, input[type="button"], input[type="submit"], input[type="reset"], ' +
+  '[role="button"], [role="link"], [role="menuitem"], [role="tab"]';
+
+/** Intent signals that a non-semantic element (icon/div/span) is clickable. */
+const HEURISTIC_CLICK_SELECTOR =
+  '[onclick], [tabindex]:not([tabindex="-1"]), [aria-haspopup], ' +
+  '[class*="btn"], [class*="button"], [class*="icon"]';
+
+/** True if the element's computed cursor is `pointer` (a strong click hint). */
+function hasPointerCursor(el: Element): boolean {
+  const view = el.ownerDocument.defaultView;
+  if (!view) return false;
+  return view.getComputedStyle(el as HTMLElement).cursor === 'pointer';
+}
+
+/**
+ * Resolve the element a click should be attributed to, or null if the click is
+ * not an action. A semantic ancestor (button/link/role) wins so its label names
+ * the event even when the click lands on an inner <svg>. Otherwise a Balanced
+ * heuristic walks up a few levels for an intent-bearing wrapper (onclick,
+ * tabindex, aria-haspopup, btn/button/icon class, or cursor:pointer); a bare
+ * icon with no actionable wrapper is still recorded via its own tag.
+ */
+export function clickActionTarget(target: Element): Element | null {
+  const semantic = target.closest(SEMANTIC_CLICK_SELECTOR);
+  if (semantic) return semantic;
+  let el: Element | null = target;
+  for (let depth = 0; el && depth < 4; depth += 1, el = el.parentElement) {
+    if (el.matches(HEURISTIC_CLICK_SELECTOR) || hasPointerCursor(el)) return el;
+  }
+  return target.closest('svg, i');
+}
+
+/** Return the calendar cell if `el` sits inside a date-picker popup, else null. */
+export function isCalendarCell(el: Element): Element | null {
+  const cell = el.closest('[role="gridcell"]');
+  if (cell && cell.closest('[role="dialog"], [role="grid"]')) return cell;
+  return null;
+}
+
+/** The current value of a field control or its descendant input/textarea. */
+export function fieldValueOf(control: Element): string | undefined {
+  const field = (
+    control.matches('input, textarea') ? control : control.querySelector('input, textarea')
+  ) as HTMLInputElement | HTMLTextAreaElement | null;
+  return field ? field.value.trim() : undefined;
+}
+
+/** The human-readable text of the selected option in a native <select>. */
+export function selectedOptionText(select: HTMLSelectElement): string | undefined {
+  return select.selectedOptions[0]?.text?.trim() || select.value || undefined;
 }
 
 /** Build a short, reasonably-stable CSS path as a fallback selector. */
@@ -139,7 +293,9 @@ export function selectorInputFor(el: Element): SelectorInput {
   const label = associatedLabelText(el);
   if (label) input.labelText = label;
   const text = el.textContent?.trim();
-  if (text && text.length <= 40) input.visibleText = text;
+  // Skip visible text for sensitive fields (e.g. contenteditable) so a secret
+  // never leaks into a getByText() selector candidate.
+  if (text && text.length <= 40 && !fieldIsSensitive(el)) input.visibleText = text;
   return input;
 }
 

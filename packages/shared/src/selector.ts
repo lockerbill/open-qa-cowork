@@ -41,7 +41,11 @@ export interface SelectorInput {
 
 /** Escape a single-quoted string for embedding in generated locator code. */
 export function escapeForSingleQuotes(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
 }
 
 function q(value: string): string {

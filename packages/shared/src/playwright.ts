@@ -85,7 +85,17 @@ function stepForEvent(ev: ActionEvent, warnings: SelectorWarning[]): string[] {
       }
       break;
     case 'select':
-      lines.push(`  await ${expr}.selectOption(${lit(ev.value ?? '')});`);
+      if (ev.valueType === 'aria-option') {
+        // Custom (ARIA) dropdown — not a native <select>; selectOption would throw.
+        // Open the control, then click the option by its visible name.
+        lines.push(`  await ${expr}.click();`);
+        lines.push(
+          `  await page.getByRole('option', { name: ${lit(ev.valueText ?? ev.value ?? '')} }).click();`,
+        );
+      } else {
+        // Native <select> — Playwright matches an <option> by value or label.
+        lines.push(`  await ${expr}.selectOption(${lit(ev.valueText ?? ev.value ?? '')});`);
+      }
       break;
     case 'checkbox':
       lines.push(`  await ${expr}.${ev.value === 'false' ? 'uncheck' : 'check'}();`);
