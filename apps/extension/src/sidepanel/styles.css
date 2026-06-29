@@ -180,6 +180,11 @@ input[type='text'] {
   font-size: 12px;
 }
 
+.ok {
+  color: var(--ok);
+  font-size: 12px;
+}
+
 .warn {
   color: #9a6700;
   background: #fff8c5;

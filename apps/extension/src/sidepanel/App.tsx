@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { buildSessionMarkdown } from '@qa-copilot/shared';
 import type { PanelState, Settings } from '../shared/messages.js';
 import { STATE_CHANGED } from '../shared/messages.js';
 import * as bg from './chrome-client.js';
@@ -208,6 +209,7 @@ function PageTab({ state, settings }: { state: PanelState; settings: Settings | 
 function SessionTab({ state, onChange }: { state: PanelState; onChange: () => void }) {
   const { session, recording } = state;
   const [err, setErr] = useState('');
+  const [copied, setCopied] = useState(false);
   const screenshots = session.evidence.filter((e) => e.type === 'screenshot' && e.dataUrl);
   return (
     <div className="section">
@@ -245,6 +247,22 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
         >
           Export JSON
         </button>
+        <button
+          className="ghost"
+          disabled={session.events.length === 0}
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(buildSessionMarkdown(session));
+              setErr('');
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            } catch {
+              setErr('Copy to clipboard failed');
+            }
+          }}
+        >
+          Copy events
+        </button>
       </div>
 
       <div className="row" style={{ marginTop: 8 }}>
@@ -253,6 +271,12 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
         <span className="chip">{session.consoleErrors.length} console</span>
         <span className="chip">{session.networkFailures.length} network</span>
       </div>
+
+      {copied && (
+        <div className="row">
+          <span className="ok">Copied to clipboard</span>
+        </div>
+      )}
 
       {err && (
         <div className="row">
