@@ -12,6 +12,7 @@ import {
   type GenerateResponse,
 } from './backend.js';
 import { downloadJson, downloadMarkdown, downloadTypeScript } from './exports.js';
+import { previewMarkdown } from './preview.js';
 
 type Tab = 'page' | 'session' | 'generate';
 
@@ -385,6 +386,7 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
           title="Test cases"
           res={tc}
           onExport={() => downloadMarkdown(`test-cases-${tc.artifactId}.md`, tc.content)}
+          onPreview={() => previewMarkdown('Test cases', tc.content)}
         />
       )}
 
@@ -420,6 +422,7 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
           title="Bug report"
           res={bug}
           onExport={() => downloadMarkdown(`bug-report-${bug.artifactId}.md`, bug.content)}
+          onPreview={() => previewMarkdown('Bug report', bug.content)}
         />
       )}
 
@@ -452,10 +455,12 @@ function ArtifactView({
   title,
   res,
   onExport,
+  onPreview,
 }: {
   title: string;
   res: GenerateResponse;
   onExport: () => void;
+  onPreview?: () => void;
 }) {
   return (
     <div>
@@ -465,6 +470,11 @@ function ArtifactView({
         <button className="ghost" onClick={onExport}>
           Export
         </button>
+        {onPreview && (
+          <button className="ghost" onClick={onPreview}>
+            Preview
+          </button>
+        )}
       </div>
       {res.selectorWarnings && res.selectorWarnings.length > 0 && (
         <div className="warn">
