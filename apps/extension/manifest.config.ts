@@ -9,7 +9,7 @@ import { defineManifest } from '@crxjs/vite-plugin';
 export default defineManifest({
   manifest_version: 3,
   name: 'QA Copilot',
-  version: '0.1.3',
+  version: '0.1.5',
   description: 'AI pair-tester for manual QA: analyze pages, record flows, generate tests & bug reports.',
   icons: {
     16: 'icons/icon-16.png',
@@ -37,7 +37,7 @@ export default defineManifest({
       all_frames: false,
     },
   ],
-  permissions: ['activeTab', 'scripting', 'sidePanel', 'storage', 'tabs'],
+  permissions: ['activeTab', 'scripting', 'sidePanel', 'storage', 'tabs', 'desktopCapture', 'tabCapture'],
   host_permissions: ['http://localhost/*', 'http://127.0.0.1/*'],
   // optional_host_permissions is valid MV3 but missing from crxjs's types.
   ...({ optional_host_permissions: ['https://*/*', 'http://*/*'] } as Record<string, unknown>),

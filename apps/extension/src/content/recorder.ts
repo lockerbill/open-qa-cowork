@@ -4,10 +4,13 @@ import {
   clickActionTarget,
   fieldIsSensitive,
   fieldValueOf,
+  isAutocompleteInput,
   isCalendarCell,
+  lookupOpenInput,
   OPTION_ROLE_SELECTOR,
   optionRawValue,
   optionValueText,
+  resolveDateField,
   resolveOwningControl,
   selectedOptionText,
   selectorInputFor,
@@ -48,6 +51,11 @@ export function createRecorder(
   // change event from its backing control collapse into a single event.
   let lastSelection: { value?: string; valueText?: string; ts: number } | null = null;
   const DEDUP_WINDOW_MS = 600;
+  // Remembers the lookup whose "extended search" modal is open, so a row click
+  // in the (body-appended, DOM-detached) modal can be attributed back to its
+  // field. Set on open, cleared on consume, TTL-guarded against stale state.
+  let pendingLookup: { input: Element; ts: number } | null = null;
+  const LOOKUP_TTL_MS = 5 * 60 * 1000;
 
   const baseEvent = (el: Element | null, type: ActionType): ActionEvent => {
     const ev: ActionEvent = { id: nextId(), sessionId, type, timestamp: new Date().toISOString() };
@@ -83,6 +91,19 @@ export function createRecorder(
     emit(ev);
   };
 
+  /**
+   * Snapshot a lookup field's value after its async (AngularJS) update settles
+   * and emit it as a single de-duped input event. Used for both the inline
+   * typeahead option click and the extended-search modal row click; the field's
+   * committed display is more reliable than the rendered option/row text.
+   */
+  const emitLookup = (input: Element, fallback: string | undefined, delayMs: number) => {
+    window.setTimeout(() => {
+      const value = fieldValueOf(input) || fallback || '';
+      emitSelection(input, value, undefined, 'lookup', 'input');
+    }, delayMs);
+  };
+
   const onClick = (e: Event) => {
     const target = e.target as Element | null;
     if (!target) return;
@@ -90,8 +111,8 @@ export function createRecorder(
     // 1. Custom date picker: clicking a calendar cell updates an owned field.
     const cell = isCalendarCell(target);
     if (cell) {
-      const owner = resolveOwningControl(cell, doc);
-      if (owner && fieldValueOf(owner) !== undefined) {
+      const owner = resolveDateField(cell, doc);
+      if (owner) {
         // The field is updated asynchronously after the click — snapshot it then.
         window.setTimeout(() => {
           const value = fieldValueOf(owner) || cell.textContent?.trim() || '';
@@ -105,11 +126,37 @@ export function createRecorder(
     const option = target.closest(OPTION_ROLE_SELECTOR);
     if (option) {
       const owner = resolveOwningControl(option, doc) ?? option;
+      // Typeahead/autocomplete lookup: the rendered match may be a messy custom
+      // template, so snapshot the input's committed value instead.
+      if (isAutocompleteInput(owner)) {
+        emitLookup(owner, optionValueText(option), 150);
+        return;
+      }
       emitSelection(owner, optionRawValue(option), optionValueText(option), 'aria-option');
       return;
     }
 
-    // 3. Generic action click: a semantic element (link/button/menuitem/tab) or
+    // 3. Selecting a row in a lookup's "extended search" modal updates the field
+    //    that opened it (the modal is body-appended and DOM-detached).
+    if (pendingLookup && Date.now() - pendingLookup.ts < LOOKUP_TTL_MS) {
+      const row = target.closest('tr');
+      if (row && target.closest('[role="dialog"], .modal')) {
+        const rowText = row.textContent?.replace(/\s+/g, ' ').trim().slice(0, 80);
+        emitLookup(pendingLookup.input, rowText, 250);
+        pendingLookup = null;
+        return;
+      }
+    }
+
+    // 4. Opening a lookup's extended-search modal: remember its field, suppress
+    //    the trigger click (it is plumbing, not a recorded step).
+    const lookupInput = lookupOpenInput(target);
+    if (lookupInput) {
+      pendingLookup = { input: lookupInput, ts: Date.now() };
+      return;
+    }
+
+    // 5. Generic action click: a semantic element (link/button/menuitem/tab) or
     //    a Balanced-heuristic clickable (icon/div/span showing interaction intent).
     const el = clickActionTarget(target);
     if (!el) return;

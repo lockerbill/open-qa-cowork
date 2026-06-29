@@ -120,7 +120,10 @@ export interface ActionEvent {
   type: ActionType;
   targetElementId?: string;
   targetLabel?: string;
-  /** Describes the value semantically (e.g. "supplier name") — never raw secrets. */
+  /**
+   * Describes the value semantically — never raw secrets. Emitted values:
+   * 'text' | 'option' | 'aria-option' | 'date' | 'lookup' | 'sensitive'.
+   */
   valueType?: string;
   /** Literal/underlying value, present only for non-sensitive inputs. */
   value?: string;

@@ -135,6 +135,157 @@ describe('createRecorder — input & custom widget capture', () => {
     expect(ev.targetLabel).toBe('Date of birth');
   });
 
+  it('records a non-ARIA custom date picker (pbs-date-picker) with full value and group label', () => {
+    document.body.innerHTML = `
+      <div class="form-group">
+        <label>Blanket Start Date<abbr ng-show="true">&nbsp;*</abbr></label>
+        <pbs-date-picker pbs-model="ctrl.model.BlanketStartDate">
+          <div class="input-group" ng-form="datepickerForm">
+            <input class="form-control" type="text" uib-datepicker-popup="dd/MM/yyyy" placeholder="dd/MM/yyyy" />
+            <div uib-datepicker-popup-wrap>
+              <table role="grid"><tbody><tr>
+                <td role="gridcell"><button type="button"><span>28</span></button></td>
+                <td role="gridcell"><button type="button"><span>29</span></button></td>
+              </tr></tbody></table>
+            </div>
+            <div class="input-group-btn"><a class="btn"><i class="far fa-calendar-alt"></i></a></div>
+          </div>
+        </pbs-date-picker>
+      </div>`;
+    const session = record();
+    rec = session.rec;
+    click(document.querySelectorAll('[role="gridcell"] span')[1]!);
+    // Angular updates the bound input asynchronously after the click.
+    document.querySelector<HTMLInputElement>('input')!.value = '29/06/2026';
+    vi.advanceTimersByTime(200);
+
+    expect(session.events).toHaveLength(1);
+    const ev = session.events[0]!;
+    expect(ev.type).toBe('input');
+    expect(ev.valueType).toBe('date');
+    expect(ev.value).toBe('29/06/2026');
+    expect(ev.valueText).toBeUndefined();
+    expect(ev.targetLabel).toBe('Blanket Start Date');
+  });
+
+  it('records the full date value even when the picker has no label', () => {
+    document.body.innerHTML = `
+      <div class="input-group">
+        <input class="form-control" type="text" uib-datepicker-popup="dd/MM/yyyy" />
+        <div uib-datepicker-popup-wrap>
+          <table role="grid"><tbody><tr>
+            <td role="gridcell"><button type="button"><span>29</span></button></td>
+          </tr></tbody></table>
+        </div>
+      </div>`;
+    const session = record();
+    rec = session.rec;
+    click(document.querySelector('[role="gridcell"] span')!);
+    document.querySelector<HTMLInputElement>('input')!.value = '29/06/2026';
+    vi.advanceTimersByTime(200);
+
+    expect(session.events).toHaveLength(1);
+    const ev = session.events[0]!;
+    expect(ev.type).toBe('input');
+    expect(ev.valueType).toBe('date');
+    expect(ev.value).toBe('29/06/2026');
+    expect(ev.targetLabel).toBeUndefined();
+  });
+
+  it('records an inline typeahead lookup by snapshotting the input, not the option template', () => {
+    document.body.innerHTML = `
+      <div class="form-group">
+        <label>Vendor Code</label>
+        <pbs-lookup>
+          <div class="input-group">
+            <input type="text" aria-autocomplete="list" aria-owns="tap" placeholder="Type to Search" />
+            <ul id="tap" role="listbox">
+              <li role="option"><div><strong>ABC</strong> Metals — EPIC06 — USD — 2730 Broadway, St. Paul MN 55113</div></li>
+            </ul>
+          </div>
+        </pbs-lookup>
+      </div>`;
+    const session = record();
+    rec = session.rec;
+    click(document.querySelector('[role="option"] strong')!);
+    // uib-typeahead updates the bound input asynchronously after the click.
+    document.querySelector<HTMLInputElement>('input')!.value = 'ABC Metals';
+    vi.advanceTimersByTime(200);
+
+    expect(session.events).toHaveLength(1);
+    const ev = session.events[0]!;
+    expect(ev.type).toBe('input');
+    expect(ev.valueType).toBe('lookup');
+    expect(ev.value).toBe('ABC Metals');
+    expect(ev.targetLabel).toBe('Vendor Code');
+  });
+
+  it('records an extended-search modal row selection against the originating field', () => {
+    document.body.innerHTML = `
+      <div class="form-group">
+        <label>Vendor Code</label>
+        <pbs-lookup>
+          <div class="input-group">
+            <input type="text" aria-autocomplete="list" placeholder="Type to Search" />
+            <div class="input-group-btn"><button type="button"><i class="fa fa-search"></i></button></div>
+          </div>
+        </pbs-lookup>
+      </div>`;
+    const session = record();
+    rec = session.rec;
+
+    // Opening the modal is plumbing — no event, but the field is remembered.
+    click(document.querySelector('button i')!);
+    expect(session.events).toHaveLength(0);
+
+    // uib appends the modal to <body>, detached from the field.
+    const modal = document.createElement('div');
+    modal.setAttribute('role', 'dialog');
+    modal.innerHTML = `
+      <table class="table">
+        <tbody>
+          <tr ng-click="ctrl.selectItem(item)"><td>EPIC06</td><td>ABCM</td><td><small>ABC Metals</small></td></tr>
+        </tbody>
+      </table>`;
+    document.body.appendChild(modal);
+
+    click(modal.querySelector('small')!);
+    // Selecting a row writes the value back to the field and closes the modal.
+    document.querySelector<HTMLInputElement>('input')!.value = 'ABCM';
+    vi.advanceTimersByTime(300);
+
+    expect(session.events).toHaveLength(1);
+    const ev = session.events[0]!;
+    expect(ev.type).toBe('input');
+    expect(ev.valueType).toBe('lookup');
+    expect(ev.value).toBe('ABCM');
+    expect(ev.targetLabel).toBe('Vendor Code');
+  });
+
+  it('records free-typed text in a lookup input via the normal change path', () => {
+    document.body.innerHTML = `
+      <div class="form-group">
+        <label>Vendor Code</label>
+        <pbs-lookup>
+          <div class="input-group">
+            <input type="text" aria-autocomplete="list" placeholder="Type to Search" />
+          </div>
+        </pbs-lookup>
+      </div>`;
+    const session = record();
+    rec = session.rec;
+    const input = document.querySelector<HTMLInputElement>('input')!;
+    input.value = 'CUSTOM';
+    change(input);
+
+    expect(session.events).toHaveLength(1);
+    const ev = session.events[0]!;
+    expect(ev.type).toBe('input');
+    expect(ev.valueType).toBe('text');
+    expect(ev.value).toBe('CUSTOM');
+    expect(ev.targetLabel).toBe('Vendor Code');
+  });
+
   it('de-duplicates an option click followed by a backing <select> change', () => {
     document.body.innerHTML = `
       <div role="combobox" aria-label="Region" aria-controls="lb" aria-expanded="true">North</div>

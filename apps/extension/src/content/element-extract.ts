@@ -57,6 +57,26 @@ export function associatedLabelText(el: Element): string | undefined {
 }
 
 /**
+ * Find the field's label when it is a sibling under a form-field wrapper
+ * (AngularJS/Bootstrap `.form-group`) rather than associated via `for`/wrapping —
+ * the common shape for custom controls like `<pbs-date-picker>`. Returns the
+ * group's `<label>` text, with required markers ("*"/":") and `&nbsp;` stripped.
+ * Returns undefined when the group holds more than one control (ambiguous, would
+ * mislabel) or has no label.
+ */
+export function nearbyLabelText(el: Element): string | undefined {
+  const group = el.closest('.form-group, .form-field, .field, [class*="form-group" i]');
+  if (!group) return undefined;
+  const controls = Array.from(
+    group.querySelectorAll('input, select, textarea, [contenteditable=""], [contenteditable="true"]'),
+  ).filter((c) => !c.closest(POPUP_SELECTOR));
+  if (controls.length !== 1) return undefined;
+  const raw = group.querySelector('label')?.textContent;
+  if (!raw) return undefined;
+  return raw.replace(/\s+/g, ' ').replace(/[\s*:]+$/, '').trim() || undefined;
+}
+
+/**
  * An editable, value-bearing control whose text content is *user data*, not a
  * label: a <textarea>, a text-like <input>, or a contenteditable host. Its
  * content must never be used as an accessible name (it would mislabel the field
@@ -68,6 +88,22 @@ function isEditableField(el: Element): boolean {
   if (tag === 'input') {
     const type = (el.getAttribute('type') ?? 'text').toLowerCase();
     return !['button', 'submit', 'reset', 'checkbox', 'radio'].includes(type);
+  }
+  const editable = el.getAttribute('contenteditable');
+  return editable === '' || editable === 'true';
+}
+
+/**
+ * A form control that a sibling `<label>` can name (input/select/textarea/
+ * contenteditable). Used to gate the nearby-label fallback so buttons, links and
+ * icons keep deriving their name from their own text content.
+ */
+function isLabelableControl(el: Element): boolean {
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'select' || tag === 'textarea') return true;
+  if (tag === 'input') {
+    const type = (el.getAttribute('type') ?? 'text').toLowerCase();
+    return !['button', 'submit', 'reset'].includes(type);
   }
   const editable = el.getAttribute('contenteditable');
   return editable === '' || editable === 'true';
@@ -90,6 +126,13 @@ export function accessibleName(el: Element): string | undefined {
 
   const label = associatedLabelText(el);
   if (label) return label;
+
+  // Sibling <label> in the same field group (AngularJS/Bootstrap .form-group),
+  // for controls whose label is neither `for`-associated nor wrapping.
+  if (isLabelableControl(el)) {
+    const nearby = nearbyLabelText(el);
+    if (nearby) return nearby;
+  }
 
   // Skip the element's own content for editable fields — it is user data, not a
   // label, and could expose typed or sensitive values.
@@ -174,6 +217,78 @@ export function resolveOwningControl(node: Element, doc: Document): Element | nu
   // 4. The focused control, if it is a field-like role.
   const active = doc.activeElement;
   if (active && ['combobox', 'button', 'textbox'].includes(getRole(active) ?? '')) return active;
+  return null;
+}
+
+/**
+ * Resolve the input a date-picker cell click writes to. ARIA-linked pickers
+ * resolve via `resolveOwningControl`; non-ARIA custom pickers (e.g. AngularJS
+ * `<pbs-date-picker>` / `uib-datepicker-popup`) render the popup inline next to
+ * their text input, so we fall back to DOM proximity — the field within the same
+ * `.input-group`/`.form-group`, or a preceding sibling of the popup. Inputs
+ * inside the popup itself (e.g. datetime time-spinners) are excluded. Returns
+ * null when no field can be found (body-appended popups rely on the ARIA path).
+ */
+export function resolveDateField(cell: Element, doc: Document): Element | null {
+  const owned = resolveOwningControl(cell, doc);
+  if (owned && fieldValueOf(owned) !== undefined) return owned;
+
+  const popup = cell.closest(POPUP_SELECTOR);
+  const within = (el: Element): boolean => !!popup && popup.contains(el);
+  const editableField = (el: Element | null | undefined): Element | null => {
+    if (!el) return null;
+    const field = el.matches('input, textarea') ? el : el.querySelector('input, textarea');
+    return field && isEditableField(field) && !within(field) ? field : null;
+  };
+
+  // Primary: the field within the same field-group wrapper.
+  const group = cell.closest('.input-group, .form-group, [class*="form-group" i]');
+  if (group) {
+    for (const candidate of group.querySelectorAll('input, textarea')) {
+      if (isEditableField(candidate) && !within(candidate)) return candidate;
+    }
+  }
+
+  // Complement: a preceding sibling of the popup, walking up a few levels.
+  let node: Element | null = popup ?? cell;
+  for (let depth = 0; node && depth < 4; depth += 1, node = node.parentElement) {
+    let sib = node.previousElementSibling;
+    while (sib) {
+      const field = editableField(sib);
+      if (field) return field;
+      sib = sib.previousElementSibling;
+    }
+  }
+  return null;
+}
+
+// --- Custom lookup (typeahead / autocomplete) capture ----------------------
+
+/**
+ * An autocomplete text input — `aria-autocomplete` is list/both/inline. This is
+ * the signal Angular-UI-Bootstrap `uib-typeahead` (and ARIA comboboxes) set, and
+ * it distinguishes a typeahead lookup (whose committed value lives in the input,
+ * not the rendered option) from a plain ARIA listbox/combobox trigger.
+ */
+export function isAutocompleteInput(el: Element | null): boolean {
+  if (!el || el.tagName.toLowerCase() !== 'input') return false;
+  const mode = (el.getAttribute('aria-autocomplete') ?? '').toLowerCase();
+  return mode === 'list' || mode === 'both' || mode === 'inline';
+}
+
+/**
+ * Given a click target, resolve the autocomplete input of the lookup whose
+ * "open extended search" button was clicked: a <button> within the same
+ * `.input-group`/`pbs-lookup` that also holds an autocomplete input. Returns the
+ * input, or null when the click is not such a trigger.
+ */
+export function lookupOpenInput(target: Element): Element | null {
+  if (!target.closest('button')) return null;
+  const host = target.closest('.input-group, pbs-lookup');
+  if (!host) return null;
+  for (const input of host.querySelectorAll('input')) {
+    if (isAutocompleteInput(input)) return input;
+  }
   return null;
 }
 
