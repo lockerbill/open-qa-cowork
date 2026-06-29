@@ -95,6 +95,17 @@ describe('POST /api/page/analyze', () => {
     expect(res.body.summary).toBe('ok');
   });
 
+  it('does not leak truncated/invalid JSON into the summary', async () => {
+    // Simulates a local model cut off mid-JSON (finish_reason=length).
+    provider.response = '{"summary":"A PO page","risks":["required fiel';
+    const res = await request(app).post('/api/page/analyze').send({ pageModel });
+    expect(res.status).toBe(200);
+    expect(res.body.summary).not.toContain('{');
+    expect(res.body.summary).toMatch(/malformed or truncated JSON/);
+    expect(res.body.risks).toEqual([]);
+    expect(res.body.suggestedTests).toEqual([]);
+  });
+
   it('rejects an invalid body with 400', async () => {
     const res = await request(app).post('/api/page/analyze').send({ nope: true });
     expect(res.status).toBe(400);

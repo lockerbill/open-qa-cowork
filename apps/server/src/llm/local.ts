@@ -34,6 +34,11 @@ export class LocalProvider implements LLMProvider {
     const extraBody = this.cfg.enableThinking
       ? undefined
       : { chat_template_kwargs: { enable_thinking: false } };
+    // LOCAL_MAX_TOKENS acts as a floor: it can only raise a route's request,
+    // never lower it. Routes pass small caps tuned for fast cloud models; local
+    // models are wordier and may need more headroom to finish (avoids truncated
+    // output / finish_reason=length). Unset leaves the route default untouched.
+    const maxTokens = Math.max(opts.maxTokens ?? 0, this.cfg.maxTokens ?? 0) || undefined;
     return openAICompatibleComplete(
       {
         baseUrl: this.cfg.baseUrl,
@@ -44,7 +49,7 @@ export class LocalProvider implements LLMProvider {
         extraBody,
         timeoutMs: this.cfg.timeoutMs,
       },
-      { ...opts, maxTokens: opts.maxTokens ?? this.cfg.maxTokens },
+      { ...opts, maxTokens },
     );
   }
 }

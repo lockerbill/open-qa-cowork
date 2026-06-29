@@ -118,6 +118,20 @@ describe('LocalProvider', () => {
     expect(body.max_tokens).toBe(4096);
   });
 
+  it('lets a configured maxTokens raise a smaller per-route cap', async () => {
+    fetchMock.mockResolvedValue(ok('hi'));
+    await new LocalProvider({ ...cfg, maxTokens: 4096 }).complete({ ...opts, maxTokens: 1024 });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.max_tokens).toBe(4096);
+  });
+
+  it('never lowers a larger per-route cap below the configured maxTokens', async () => {
+    fetchMock.mockResolvedValue(ok('hi'));
+    await new LocalProvider({ ...cfg, maxTokens: 1024 }).complete({ ...opts, maxTokens: 3072 });
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.max_tokens).toBe(3072);
+  });
+
   it('strips inline <think> blocks from the returned content', async () => {
     fetchMock.mockResolvedValue(ok('<think>reasoning here</think>\nReal answer.'));
     const text = await new LocalProvider(cfg).complete(opts);

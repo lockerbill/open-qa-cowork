@@ -87,6 +87,47 @@ pnpm dev
 
 ---
 
+## Local LLM: verify your context window
+
+Only relevant when `LLM_PROVIDER=local`. There are **two different numbers** and they're easy to
+confuse:
+
+- **Model capability** — what the model was trained for (e.g. 128K).
+- **Served context (`num_ctx`)** — what the backend actually loads. **Ollama defaults this to 4096**
+  and silently truncates longer prompts to it, regardless of the model's capability.
+
+`LOCAL_MAX_TOKENS` is an **output-only** cap that shares the window with the prompt
+(`input + output ≤ context`), and the OpenAI-compatible client only sends `max_tokens` — never
+`num_ctx`. So the served context must be raised on the **backend**, not via `.env`. Confirm it:
+
+| Backend | Check served context | Raise it |
+| --- | --- | --- |
+| **Ollama** (`:11434`) | `ollama show <model>` (capability) · `ollama ps` (loaded `CONTEXT`) | `OLLAMA_CONTEXT_LENGTH=131072 ollama serve` |
+| **vLLM / SGLang** (`:8000`) | `curl -s http://localhost:8000/v1/models \| jq '.data[].max_model_len'` | `--max-model-len 131072` at launch |
+| **llama.cpp** (`:8080`) | `curl -s http://localhost:8080/props \| jq '.default_generation_settings.n_ctx'` | `-c 131072` at launch |
+| **LM Studio** (`:1234`) | model-load screen / server log (`/v1/models` doesn't report it) | Context Length slider when loading |
+
+**Universal empirical test** (any backend) — send a prompt longer than 4K tokens that ends in a
+marker, and check the reply still sees it:
+
+```bash
+curl -s http://localhost:11434/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"<model>","max_tokens":50,"messages":[
+    {"role":"user","content":"<...paste ~6000 words of filler...> The secret word is BANANA. Repeat the secret word."}]}'
+```
+
+If the reply is `BANANA`, the start of the prompt wasn't dropped → served context comfortably
+exceeds 4K. If it answers as if it never saw the marker, the prompt was truncated → the served
+context is small. (`finish_reason=length` / `completion_tokens`, which the server already surfaces on
+empty responses, are also truncation signals.)
+
+Once the backend serves the full window, tune output with `LOCAL_MAX_TOKENS` (see
+`apps/server/.env.example`; **4096–8192** is the sweet spot — it's a floor that raises every route,
+so don't set it huge).
+
+---
+
 ## Testing
 
 ### Unit + integration (fast, no browser, no API key)
@@ -176,6 +217,7 @@ With server + extension running:
 | SPA navigation not recorded | Page-context signal must come from `public/injected.js` (main world), not the content script. |
 | Recorded actions dropped under load | Background storage write must go through `updateSession()`/`runExclusive()` — direct `chrome.storage` writes race. |
 | Generation endpoint 5xx | Missing/invalid API key in `apps/server/.env`, or wrong `LLM_PROVIDER`. Check the server log. |
+| Local LLM output truncated / ignores the early prompt | Backend's served `num_ctx` is smaller than the model's window (Ollama defaults to 4096). Raise it on the backend — see *Local LLM: verify your context window*. |
 | `curl /health` refused | Server not running, or `PORT` in `.env` ≠ extension backend URL (`8787`). |
 | E2E can't find the extension | You didn't `build` before `test:e2e`; the suite loads `apps/extension/dist`. |
 | `playwright` browser missing | `pnpm --filter @qa-copilot/extension exec playwright install chromium`. |

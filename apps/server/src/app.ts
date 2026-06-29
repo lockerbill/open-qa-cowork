@@ -42,17 +42,35 @@ export function createApp(provider: LLMProvider, logger: Logger = defaultLogger(
       const text = await provider.complete({
         system: analyzeSystem(),
         user: analyzeUser(body.pageModel as never, body.question),
-        maxTokens: 1024,
+        maxTokens: 2048,
       });
       const parsed = parseJsonLoose<{
         summary: string;
         risks: string[];
         suggestedTests: string[];
       }>(text);
+      if (!parsed) {
+        // Parse failed — most often truncated JSON (finish_reason=length on a
+        // verbose local model). Don't leak the broken raw JSON into the UI:
+        // show prose as-is, but replace JSON-looking output with a clear hint.
+        const looksJson = text.trim().startsWith('{');
+        logger.warn(
+          { event: 'analyze.parse_failed', looksJson, len: text.length },
+          'analyze JSON parse failed',
+        );
+        res.json({
+          summary: looksJson
+            ? 'The model returned malformed or truncated JSON. Try again, or raise LOCAL_MAX_TOKENS for a larger response.'
+            : text.trim(),
+          risks: [],
+          suggestedTests: [],
+        });
+        return;
+      }
       res.json({
-        summary: parsed?.summary ?? text.trim(),
-        risks: parsed?.risks ?? [],
-        suggestedTests: parsed?.suggestedTests ?? [],
+        summary: parsed.summary,
+        risks: parsed.risks ?? [],
+        suggestedTests: parsed.suggestedTests ?? [],
       });
     }),
   );
