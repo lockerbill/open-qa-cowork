@@ -2,15 +2,31 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { LocalProvider } from './local.js';
 import { LLMError } from './types.js';
 
-const ok = (content: string) =>
+const ok = (
+  content: string | null,
+  extra: { finish_reason?: string; reasoning_content?: string; usage?: unknown } = {},
+) =>
   ({
     ok: true,
     status: 200,
-    json: async () => ({ choices: [{ message: { content } }] }),
+    json: async () => ({
+      choices: [
+        {
+          finish_reason: extra.finish_reason,
+          message: { content, reasoning_content: extra.reasoning_content },
+        },
+      ],
+      usage: extra.usage,
+    }),
     text: async () => '',
   }) as unknown as Response;
 
-const cfg = { baseUrl: 'http://localhost:11434/v1', model: 'llama3.1', apiKey: '' };
+const cfg = {
+  baseUrl: 'http://localhost:11434/v1',
+  model: 'llama3.1',
+  apiKey: '',
+  enableThinking: false,
+};
 const opts = { system: 'sys', user: 'hello' };
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -81,8 +97,54 @@ describe('LocalProvider', () => {
     await expect(new LocalProvider(cfg).complete(opts)).rejects.toThrow(/Local LLM API 500/);
   });
 
-  it('throws when the response has no content', async () => {
-    fetchMock.mockResolvedValue(ok(''));
-    await expect(new LocalProvider(cfg).complete(opts)).rejects.toThrow(/no content/);
+  it('disables thinking by default via chat_template_kwargs', async () => {
+    fetchMock.mockResolvedValue(ok('hi'));
+    await new LocalProvider(cfg).complete(opts);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
+  it('omits chat_template_kwargs when thinking is enabled', async () => {
+    fetchMock.mockResolvedValue(ok('hi'));
+    await new LocalProvider({ ...cfg, enableThinking: true }).complete(opts);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.chat_template_kwargs).toBeUndefined();
+  });
+
+  it('passes a configured maxTokens through to the request', async () => {
+    fetchMock.mockResolvedValue(ok('hi'));
+    await new LocalProvider({ ...cfg, maxTokens: 4096 }).complete(opts);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.max_tokens).toBe(4096);
+  });
+
+  it('strips inline <think> blocks from the returned content', async () => {
+    fetchMock.mockResolvedValue(ok('<think>reasoning here</think>\nReal answer.'));
+    const text = await new LocalProvider(cfg).complete(opts);
+    expect(text).toBe('Real answer.');
+  });
+
+  it('reports finish_reason and a thinking hint when content is empty', async () => {
+    fetchMock.mockResolvedValue(
+      ok('', { finish_reason: 'length', usage: { completion_tokens: 2048 } }),
+    );
+    await expect(new LocalProvider(cfg).complete(opts)).rejects.toThrow(
+      /no content \(finish_reason=length, completion_tokens=2048\).*thinking/,
+    );
+  });
+
+  it('throws a 504 when the request exceeds the timeout', async () => {
+    fetchMock.mockImplementation((_url, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        (init.signal as AbortSignal).addEventListener('abort', () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      });
+    });
+    await expect(
+      new LocalProvider({ ...cfg, timeoutMs: 10 }).complete(opts),
+    ).rejects.toMatchObject({ name: 'LLMError', status: 504 });
   });
 });

@@ -19,6 +19,9 @@ describe('loadConfig', () => {
       baseUrl: 'http://localhost:11434/v1',
       model: 'llama3.1',
       apiKey: 'token',
+      enableThinking: false,
+      maxTokens: undefined,
+      timeoutMs: 120000,
     });
   });
 
@@ -27,7 +30,22 @@ describe('loadConfig', () => {
       baseUrl: '',
       model: '',
       apiKey: '',
+      enableThinking: false,
+      maxTokens: undefined,
+      timeoutMs: 120000,
     });
+  });
+
+  it('reads the local thinking, max-tokens, and timeout knobs', () => {
+    const config = loadConfig({
+      LLM_PROVIDER: 'local',
+      LOCAL_ENABLE_THINKING: 'true',
+      LOCAL_MAX_TOKENS: '4096',
+      LOCAL_TIMEOUT_MS: '60000',
+    });
+    expect(config.local.enableThinking).toBe(true);
+    expect(config.local.maxTokens).toBe(4096);
+    expect(config.local.timeoutMs).toBe(60000);
   });
 
   it('recognizes the openrouter provider and populates its config', () => {

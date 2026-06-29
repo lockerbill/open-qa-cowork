@@ -10,6 +10,27 @@ export interface OpenAICompatParams {
   label: string;
   /** When true, an empty apiKey is a 503 configuration error. */
   requireApiKey?: boolean;
+  /**
+   * Extra fields shallow-merged into the request body. Used by the local
+   * provider to pass server-specific knobs (e.g. vLLM's chat_template_kwargs).
+   * Do NOT set this for cloud providers — they reject unknown body fields.
+   */
+  extraBody?: Record<string, unknown>;
+  /** Abort the request after this many ms. Omitted/0 means wait indefinitely. */
+  timeoutMs?: number;
+}
+
+interface ChatCompletionResponse {
+  choices?: {
+    finish_reason?: string;
+    message?: { content?: string | null; reasoning_content?: string | null };
+  }[];
+  usage?: { completion_tokens?: number };
+}
+
+/** Remove inline <think>...</think> reasoning blocks some servers leave in `content`. */
+function stripThinkTags(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
 /**
@@ -30,25 +51,52 @@ export async function openAICompatibleComplete(
     headers.authorization = `Bearer ${params.apiKey}`;
   }
 
-  const res = await fetch(`${params.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: params.model,
-      max_tokens: opts.maxTokens ?? 2048,
-      messages: [
-        { role: 'system', content: opts.system },
-        { role: 'user', content: opts.user },
-      ],
-    }),
-  });
+  const controller = params.timeoutMs ? new AbortController() : undefined;
+  const timer = controller ? setTimeout(() => controller.abort(), params.timeoutMs) : undefined;
+
+  let res: Response;
+  try {
+    res = await fetch(`${params.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: params.model,
+        max_tokens: opts.maxTokens ?? 2048,
+        messages: [
+          { role: 'system', content: opts.system },
+          { role: 'user', content: opts.user },
+        ],
+        ...params.extraBody,
+      }),
+      signal: controller?.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new LLMError(`${params.label} timed out after ${params.timeoutMs}ms`, 504);
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new LLMError(`${params.label} API ${res.status}: ${body.slice(0, 300)}`);
   }
-  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new LLMError(`${params.label} returned no content`);
-  return text;
+  const data = (await res.json()) as ChatCompletionResponse;
+  const choice = data.choices?.[0];
+  const text = stripThinkTags(choice?.message?.content ?? '');
+  if (text) return text;
+
+  // Empty content. For reasoning models (e.g. Qwen3) this usually means the
+  // token budget was spent thinking before any answer was emitted. Surface the
+  // finish_reason / token usage so the failure is diagnosable instead of opaque.
+  const finishReason = choice?.finish_reason ?? 'unknown';
+  const completionTokens = data.usage?.completion_tokens;
+  const hint =
+    finishReason === 'length'
+      ? ' — the model may have spent its token budget thinking; raise LOCAL_MAX_TOKENS or disable thinking'
+      : '';
+  const tokens = completionTokens != null ? `, completion_tokens=${completionTokens}` : '';
+  throw new LLMError(`${params.label} returned no content (finish_reason=${finishReason}${tokens})${hint}`);
 }

@@ -7,6 +7,16 @@ export interface LocalConfig {
   model: string;
   /** Usually blank; set only if the local server requires a bearer token. */
   apiKey: string;
+  /**
+   * Whether to let reasoning models (Qwen3, etc.) emit thinking tokens. Off by
+   * default: thinking burns the output budget and can leave `content` empty,
+   * which surfaced as a 502 "Local LLM returned no content".
+   */
+  enableThinking: boolean;
+  /** Per-call output token cap; overrides the OpenAI-compatible default of 2048. */
+  maxTokens?: number;
+  /** Abort the request after this many ms (local inference can be slow). */
+  timeoutMs?: number;
 }
 
 /** Local model served via any OpenAI-compatible endpoint (spec §12.2). */
@@ -18,6 +28,12 @@ export class LocalProvider implements LLMProvider {
   async complete(opts: CompleteOptions): Promise<string> {
     if (!this.cfg.baseUrl) throw new LLMError('LOCAL_BASE_URL is not configured', 503);
     if (!this.cfg.model) throw new LLMError('LOCAL_MODEL is not configured', 503);
+    // vLLM/SGLang read chat_template_kwargs to toggle a reasoning model's
+    // thinking. Only sent when thinking is disabled; harmless on templates
+    // that ignore it. Omitted entirely when thinking is enabled.
+    const extraBody = this.cfg.enableThinking
+      ? undefined
+      : { chat_template_kwargs: { enable_thinking: false } };
     return openAICompatibleComplete(
       {
         baseUrl: this.cfg.baseUrl,
@@ -25,8 +41,10 @@ export class LocalProvider implements LLMProvider {
         model: this.cfg.model,
         label: 'Local LLM',
         requireApiKey: false,
+        extraBody,
+        timeoutMs: this.cfg.timeoutMs,
       },
-      opts,
+      { ...opts, maxTokens: opts.maxTokens ?? this.cfg.maxTokens },
     );
   }
 }
