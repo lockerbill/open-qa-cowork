@@ -70,6 +70,7 @@ packages/shared/        Pure, framework-free domain logic (consumed by both apps
   src/selector.ts         Selector-priority ladder → Playwright locator fragments
   src/redaction.ts        Sensitive-field detection + email/card/JWT/token masking
   src/playwright.ts       Deterministic .spec.ts templating from a TestSession
+  src/sessionMarkdown.ts  Deterministic TestSession → Markdown export
 
 apps/extension/         MV3 Chrome extension (Vite + @crxjs + React 18)
   manifest.config.ts      MV3 manifest (defineManifest); localhost + allowlist only
@@ -78,14 +79,18 @@ apps/extension/         MV3 Chrome extension (Vite + @crxjs + React 18)
   src/background/         Service worker: session state, serialized storage, allowlist
   src/sidepanel/          React UI (Page / Session / Generate tabs) + exporters
   src/options/            Settings: backend URL, environment, allowlist
+  src/shared/             Cross-context glue: messages.ts (typed message bus), storage.ts
   e2e/                    Playwright E2E against a static SPA fixture
 
 apps/server/            Thin Express proxy
   src/app.ts              createApp(provider) — DI; the 4 generation routes
-  src/llm/                Provider-agnostic gateway (anthropic.ts, openai.ts, local.ts, factory)
+  src/llm/                Provider-agnostic gateway: createProvider() factory in index.ts,
+                          providers anthropic.ts / openai.ts / openrouter.ts / local.ts
+                          (the latter three share openai-compatible.ts), LoggingProvider decorator
   src/redaction/guard.ts  Defense-in-depth re-redaction + untrusted-data wrapping
   src/prompts/            Layered-context prompt builders
-  src/http/               zod schemas + JSON parsing helpers
+  src/http/               zod schemas + JSON parsing helpers + request-id middleware
+  src/logging/            pino logger + AsyncLocalStorage request-context
 ```
 
 ## Run Targets
