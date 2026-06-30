@@ -29,7 +29,12 @@ export function aiTasksRouter(
       const body = aiGenerateBugReportSchema.parse(req.body);
       const result = await runGenerateBugReport(
         { db, masterKey, logger, allowPrivateHosts },
-        { workspaceId: req.params.workspaceId!, userId: req.user!.id },
+        {
+          workspaceId: req.params.workspaceId!,
+          userId: req.user!.id,
+          projectId: body.projectId,
+          environmentId: body.environmentId,
+        },
         body,
       );
       res.json(result);

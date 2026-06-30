@@ -78,13 +78,20 @@ function providerFor(
  * AiTaskRun + UsageLog + audit events. Records a failed run (with a correlation
  * id) before surfacing a safe error.
  */
+export interface AiTaskContext {
+  workspaceId: string;
+  userId: string;
+  projectId?: string;
+  environmentId?: string;
+}
+
 export async function runGenerateBugReport(
   deps: AiTaskDeps,
-  ctx: { workspaceId: string; userId: string },
+  ctx: AiTaskContext,
   input: BugReportInput,
 ): Promise<BugReportResult> {
   const { db, masterKey, logger } = deps;
-  const config = await resolveProviderConfig(db, ctx.workspaceId);
+  const config = await resolveProviderConfig(db, ctx.workspaceId, ctx.projectId);
   // Re-check the stored base URL before any server-side request (SSRF guard).
   await assertSafeProviderUrl(config.baseUrl, { allowPrivate: deps.allowPrivateHosts });
 
@@ -93,6 +100,8 @@ export async function runGenerateBugReport(
     .values({
       id: genId('taskrun'),
       workspaceId: ctx.workspaceId,
+      projectId: ctx.projectId ?? null,
+      environmentId: ctx.environmentId ?? null,
       sessionId: input.sessionId ?? null,
       userId: ctx.userId,
       taskType: 'generate_bug_report',
@@ -146,6 +155,7 @@ export async function runGenerateBugReport(
       id: genId('usage'),
       workspaceId: ctx.workspaceId,
       userId: ctx.userId,
+      projectId: ctx.projectId ?? null,
       llmProviderConfigId: config.id,
       taskType: 'generate_bug_report',
       modelName: config.modelName,

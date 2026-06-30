@@ -103,5 +103,46 @@ export const aiGenerateBugReportSchema = z.object({
   pageModel: pageModelSchema.nullable().optional(),
   userNote: z.string().default(''),
   sessionId: z.string().optional(),
+  projectId: z.string().optional(),
   environmentId: z.string().optional(),
 });
+
+// --- Projects & environments (Milestone 2) ---
+
+const ENV_NAME = z.enum(['local', 'dev', 'staging', 'uat', 'production', 'custom']);
+
+export const createProjectSchema = z.object({
+  name: z.string().trim().min(1),
+  key: z
+    .string()
+    .trim()
+    .min(1)
+    .max(32)
+    .regex(/^[A-Za-z0-9_-]+$/, 'key may only contain letters, digits, _ or -'),
+  description: z.string().trim().optional(),
+  defaultLlmProviderConfigId: z.string().optional(),
+});
+
+export const updateProjectSchema = z
+  .object({
+    name: z.string().trim().min(1),
+    description: z.string().trim(),
+    defaultEnvironmentId: z.string(),
+    defaultLlmProviderConfigId: z.string().nullable(),
+    redactionPolicyId: z.string().nullable(),
+  })
+  .partial();
+
+export const createEnvironmentSchema = z.object({
+  name: ENV_NAME,
+  displayName: z.string().trim().min(1).optional(),
+  baseUrl: z.string().url().optional(),
+  allowAiObserve: z.boolean().optional(),
+  allowAiGenerate: z.boolean().optional(),
+  allowAiExecute: z.boolean().optional(),
+  allowAutoSubmit: z.boolean().optional(),
+  requireConfirmationBeforeSubmit: z.boolean().optional(),
+  requireConfirmationBeforeAttachmentUpload: z.boolean().optional(),
+});
+
+export const resolveUrlQuerySchema = z.object({ url: z.string().url() });
