@@ -1,0 +1,19 @@
+# Local Postgres for the QA Copilot multi-user platform.
+#   docker compose up -d
+# then in apps/server/.env:
+#   DATABASE_URL=postgres://qa:qa@localhost:5432/qa_copilot
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: qa
+      POSTGRES_PASSWORD: qa
+      POSTGRES_DB: qa_copilot
+    ports:
+      - '5432:5432'
+    volumes:
+      - qa_copilot_pg:/var/lib/postgresql/data
+
+volumes:
+  qa_copilot_pg:

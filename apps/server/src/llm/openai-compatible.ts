@@ -18,6 +18,12 @@ export interface OpenAICompatParams {
   extraBody?: Record<string, unknown>;
   /** Abort the request after this many ms. Omitted/0 means wait indefinitely. */
   timeoutMs?: number;
+  /**
+   * Redirect handling passed to fetch. The BYO provider path sets `'error'` so a
+   * malicious endpoint cannot redirect into an internal address (SSRF bypass).
+   * Defaults to fetch's behaviour (follow) for the trusted env-configured paths.
+   */
+  redirect?: RequestRedirect;
 }
 
 interface ChatCompletionResponse {
@@ -69,6 +75,7 @@ export async function openAICompatibleComplete(
         ...params.extraBody,
       }),
       signal: controller?.signal,
+      redirect: params.redirect,
     });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {

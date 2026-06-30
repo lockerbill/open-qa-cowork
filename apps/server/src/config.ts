@@ -4,6 +4,14 @@ import { parseLogLevel, type LogLevel } from './logging/logger.js';
 export interface Config {
   port: number;
   logLevel: LogLevel;
+  /** Postgres connection string for the multi-user platform tables. */
+  databaseUrl: string;
+  /** Secret used to sign/verify auth JWTs. */
+  jwtSecret: string;
+  /** Base64-encoded 32-byte key for the AES-256-GCM secret vault. */
+  masterEncryptionKey: string;
+  /** Allow BYO provider base URLs that resolve to private/reserved hosts (local LLMs). */
+  allowPrivateLlmHosts: boolean;
   provider: 'anthropic' | 'openai' | 'local' | 'openrouter';
   anthropic: { apiKey: string; model: string };
   openai: { apiKey: string; model: string };
@@ -23,6 +31,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     port: Number(env.PORT ?? 8787),
     logLevel: parseLogLevel(env.LOG_LEVEL),
+    databaseUrl: env.DATABASE_URL ?? '',
+    jwtSecret: env.JWT_SECRET ?? '',
+    masterEncryptionKey: env.MASTER_ENCRYPTION_KEY ?? '',
+    allowPrivateLlmHosts: env.ALLOW_PRIVATE_LLM_HOSTS === 'true',
     provider:
       provider === 'openai'
         ? 'openai'

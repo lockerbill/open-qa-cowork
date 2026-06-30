@@ -3,9 +3,10 @@ import { buildSessionMarkdown } from '@qa-copilot/shared';
 import type { PanelState, Settings } from '../shared/messages.js';
 import { STATE_CHANGED } from '../shared/messages.js';
 import * as bg from './chrome-client.js';
+import { getAuth } from '../shared/storage.js';
 import {
   analyzePage,
-  generateBugReport,
+  generateBugReportSmart,
   generatePlaywright,
   generateTestCases,
   type AnalyzeResponse,
@@ -403,13 +404,12 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
         disabled={busy !== null || state.session.events.length === 0}
         onClick={() =>
           run('bug', async () => {
+            const auth = await getAuth();
             setBug(
-              await generateBugReport(settings.backendUrl, {
+              await generateBugReportSmart(settings.backendUrl, auth, {
                 session: state.session,
                 pageModel: state.pageModel,
                 userNote: note,
-                includeConsoleErrors: true,
-                includeNetworkFailures: true,
               }),
             );
           })

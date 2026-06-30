@@ -24,6 +24,26 @@ export const DEFAULT_SETTINGS: Settings = {
   noDestructiveMode: true,
 };
 
+/**
+ * Signed-in session for the multi-user platform. The JWT is stored in
+ * chrome.storage.local; the extension never holds an LLM API key.
+ */
+export interface AuthState {
+  token: string | null;
+  userEmail: string | null;
+  currentWorkspaceId: string | null;
+  currentWorkspaceName: string | null;
+  currentWorkspaceRole: string | null;
+}
+
+export const EMPTY_AUTH: AuthState = {
+  token: null,
+  userEmail: null,
+  currentWorkspaceId: null,
+  currentWorkspaceName: null,
+  currentWorkspaceRole: null,
+};
+
 // --- Messages from the side panel / options to the background --------------
 
 export type PanelToBackground =
