@@ -100,6 +100,20 @@ function AllowlistBanner({ origin, onEnabled }: { origin: string; onEnabled: () 
   );
 }
 
+function formatAnalyzePreview(answer: AnalyzeResponse): string {
+  const lines = ['# AI suggestions', '', answer.summary];
+
+  if (answer.risks.length > 0) {
+    lines.push('', '## Risks', ...answer.risks.map((risk) => `- ${risk}`));
+  }
+
+  if (answer.suggestedTests.length > 0) {
+    lines.push('', '## Suggested tests', ...answer.suggestedTests.map((test) => `- ${test}`));
+  }
+
+  return lines.join('\n');
+}
+
 function PageTab({ state, settings }: { state: PanelState; settings: Settings | null }) {
   const summary = state.pageModel?.summary;
   const [answer, setAnswer] = useState<AnalyzeResponse | null>(null);
@@ -133,6 +147,15 @@ function PageTab({ state, settings }: { state: PanelState; settings: Settings | 
         </button>
         <button className="ghost" disabled={!state.pageModel || busy} onClick={ask}>
           {busy ? 'Asking…' : 'What should I test?'}
+        </button>
+        <button
+          className="ghost"
+          disabled={!answer}
+          onClick={() => {
+            if (answer) previewMarkdown('AI suggestions', formatAnalyzePreview(answer));
+          }}
+        >
+          Preview
         </button>
       </div>
 

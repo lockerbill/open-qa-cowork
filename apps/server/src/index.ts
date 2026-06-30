@@ -9,10 +9,16 @@ const logger = createLogger(config.logLevel);
 const provider = createProvider(config, logger);
 const app = createApp(provider, logger);
 
-app.listen(config.port, () => {
+app.listen(config.port, config.host, () => {
   logger.info(
-    { event: 'server.start', port: config.port, provider: provider.name, logLevel: config.logLevel },
-    `QA Copilot server listening on http://localhost:${config.port} (provider: ${provider.name})`,
+    {
+      event: 'server.start',
+      host: config.host,
+      port: config.port,
+      provider: provider.name,
+      logLevel: config.logLevel,
+    },
+    `QA Copilot server listening on http://${config.host}:${config.port} (provider: ${provider.name})`,
   );
   if (
     (config.provider === 'anthropic' && !config.anthropic.apiKey) ||
