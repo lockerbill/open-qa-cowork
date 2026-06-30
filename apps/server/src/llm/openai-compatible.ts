@@ -31,7 +31,17 @@ interface ChatCompletionResponse {
     finish_reason?: string;
     message?: { content?: string | null; reasoning_content?: string | null };
   }[];
-  usage?: { completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
+export interface CompletionUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+export interface CompletionWithUsage {
+  text: string;
+  usage: CompletionUsage;
 }
 
 /** Remove inline <think>...</think> reasoning blocks some servers leave in `content`. */
@@ -40,14 +50,14 @@ function stripThinkTags(text: string): string {
 }
 
 /**
- * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
- * LM Studio, llama.cpp, vLLM, ...). Shared by the cloud OpenAI provider and the
- * local provider so the request/parse logic lives in one place.
+ * Like {@link openAICompatibleComplete} but also returns the provider's token
+ * usage (`prompt_tokens` / `completion_tokens`, null when the server omits
+ * them). Used by the audited workspace gateway to record usage.
  */
-export async function openAICompatibleComplete(
+export async function openAICompatibleCompleteWithUsage(
   params: OpenAICompatParams,
   opts: CompleteOptions,
-): Promise<string> {
+): Promise<CompletionWithUsage> {
   if (params.requireApiKey && !params.apiKey) {
     throw new LLMError(`${params.label} API key is not configured`, 503);
   }
@@ -92,8 +102,12 @@ export async function openAICompatibleComplete(
   }
   const data = (await res.json()) as ChatCompletionResponse;
   const choice = data.choices?.[0];
+  const usage: CompletionUsage = {
+    inputTokens: data.usage?.prompt_tokens ?? null,
+    outputTokens: data.usage?.completion_tokens ?? null,
+  };
   const text = stripThinkTags(choice?.message?.content ?? '');
-  if (text) return text;
+  if (text) return { text, usage };
 
   // Empty content. For reasoning models (e.g. Qwen3) this usually means the
   // token budget was spent thinking before any answer was emitted. Surface the
@@ -106,4 +120,19 @@ export async function openAICompatibleComplete(
       : '';
   const tokens = completionTokens != null ? `, completion_tokens=${completionTokens}` : '';
   throw new LLMError(`${params.label} returned no content (finish_reason=${finishReason}${tokens})${hint}`);
+}
+
+/**
+ * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
+ * LM Studio, llama.cpp, vLLM, ...). Shared by the cloud OpenAI provider and the
+ * local provider so the request/parse logic lives in one place. Returns only the
+ * completion text; use {@link openAICompatibleCompleteWithUsage} when token
+ * usage is needed.
+ */
+export async function openAICompatibleComplete(
+  params: OpenAICompatParams,
+  opts: CompleteOptions,
+): Promise<string> {
+  const { text } = await openAICompatibleCompleteWithUsage(params, opts);
+  return text;
 }

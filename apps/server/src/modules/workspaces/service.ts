@@ -90,6 +90,61 @@ export async function addMember(
   return membership!;
 }
 
+/**
+ * Accept a pending invite: move the caller's membership from `invited` to
+ * `active`. Throws 404 if there is no membership and 409 if it is not pending.
+ * Writes a `member.accepted` audit event.
+ */
+export async function acceptInvite(
+  db: Database,
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceMember> {
+  const membership = await getMembership(db, workspaceId, userId);
+  if (!membership) throw new ApiError(404, 'Workspace not found');
+  if (membership.status !== 'invited') {
+    throw new ApiError(409, 'This invite is not pending');
+  }
+  const [updated] = await db
+    .update(workspaceMembers)
+    .set({ status: 'active' })
+    .where(eq(workspaceMembers.id, membership.id))
+    .returning();
+  await writeAudit(db, {
+    workspaceId,
+    actorUserId: userId,
+    action: 'member.accepted',
+    resourceType: 'workspace_member',
+    resourceId: membership.id,
+  });
+  return updated!;
+}
+
+/**
+ * Decline a pending invite: delete the membership row so the user can be
+ * re-invited cleanly. Throws 404 if there is no membership and 409 if it is not
+ * pending. Writes a `member.declined` audit event.
+ */
+export async function declineInvite(
+  db: Database,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  const membership = await getMembership(db, workspaceId, userId);
+  if (!membership) throw new ApiError(404, 'Workspace not found');
+  if (membership.status !== 'invited') {
+    throw new ApiError(409, 'This invite is not pending');
+  }
+  await db.delete(workspaceMembers).where(eq(workspaceMembers.id, membership.id));
+  await writeAudit(db, {
+    workspaceId,
+    actorUserId: userId,
+    action: 'member.declined',
+    resourceType: 'workspace_member',
+    resourceId: membership.id,
+  });
+}
+
 /** Membership of `userId` in `workspaceId`, or undefined if not a member. */
 export async function getMembership(
   db: Database,
@@ -103,17 +158,17 @@ export async function getMembership(
   return membership;
 }
 
-/** All workspaces `userId` belongs to, with their role in each. */
+/** All workspaces `userId` belongs to, with their role and membership status in each. */
 export async function listWorkspacesForUser(
   db: Database,
   userId: string,
-): Promise<Array<{ workspace: Workspace; role: WorkspaceRole }>> {
+): Promise<Array<{ workspace: Workspace; role: WorkspaceRole; status: string }>> {
   const rows = await db
-    .select({ workspace: workspaces, role: workspaceMembers.role })
+    .select({ workspace: workspaces, role: workspaceMembers.role, status: workspaceMembers.status })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(eq(workspaceMembers.userId, userId));
-  return rows.map((r) => ({ workspace: r.workspace, role: r.role as WorkspaceRole }));
+  return rows.map((r) => ({ workspace: r.workspace, role: r.role as WorkspaceRole, status: r.status }));
 }
 
 /** Fetch a workspace the user can access, or throw 404 (never reveal existence cross-tenant). */

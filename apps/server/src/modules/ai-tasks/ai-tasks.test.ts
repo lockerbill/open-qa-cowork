@@ -37,7 +37,10 @@ const session = {
 function mockFetchReturning(content: string) {
   const fn = vi.fn(async () => ({
     ok: true,
-    json: async () => ({ choices: [{ message: { content } }], usage: { completion_tokens: 50 } }),
+    json: async () => ({
+      choices: [{ message: { content } }],
+      usage: { prompt_tokens: 120, completion_tokens: 50 },
+    }),
   }));
   vi.stubGlobal('fetch', fn);
   return fn;
@@ -102,12 +105,19 @@ describe('generate-bug-report (AI task slice)', () => {
     expect(res.body.bugReport.content).toContain('Bug');
     expect(res.body.bugReport.format).toBe('markdown');
 
+    // token usage from the provider response is surfaced and persisted
+    expect(res.body.usage).toEqual({ inputTokens: 120, outputTokens: 50 });
+
     const runs = await db.select().from(aiTaskRuns);
     expect(runs).toHaveLength(1);
     expect(runs[0]!.status).toBe('succeeded');
+    expect(runs[0]!.inputTokenCount).toBe(120);
+    expect(runs[0]!.outputTokenCount).toBe(50);
 
     const usage = await db.select().from(usageLogs);
     expect(usage).toHaveLength(1);
+    expect(usage[0]!.inputTokens).toBe(120);
+    expect(usage[0]!.outputTokens).toBe(50);
 
     const actions = (await db.select().from(auditLogs)).map((e) => e.action);
     expect(actions).toContain('ai_task.started');

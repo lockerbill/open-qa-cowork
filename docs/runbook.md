@@ -27,6 +27,11 @@ cp apps/server/.env.example apps/server/.env   # then edit, see below
 LLM_PROVIDER=anthropic            # anthropic | openai | local | openrouter
 ANTHROPIC_API_KEY=sk-ant-...      # or OPENAI_API_KEY=sk-... when provider=openai
 ANTHROPIC_MODEL=claude-sonnet-4-6 # optional override
+# Multi-user platform (optional — the auth/workspace/BYO-LLM endpoints mount only
+# when all three are set; see the Database section below):
+DATABASE_URL=postgres://qa:qa@localhost:5432/qa_copilot
+JWT_SECRET=                       # long random string; signs auth JWTs
+MASTER_ENCRYPTION_KEY=            # base64 32 bytes: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 # OpenRouter (OpenAI-compatible gateway to many models) when provider=openrouter:
 # OPENROUTER_API_KEY=sk-or-...
 # OPENROUTER_MODEL=anthropic/claude-sonnet-4-6   # required, vendor/model form
@@ -35,6 +40,40 @@ ANTHROPIC_MODEL=claude-sonnet-4-6 # optional override
 # LOCAL_MODEL=llama3.1
 # LOCAL_API_KEY=                             # usually blank
 PORT=8787                         # must match the extension's default backend URL
+```
+
+---
+
+## Database (multi-user platform)
+
+Only needed for the auth / workspace / BYO-LLM endpoints. The legacy
+`/api/generate/*` endpoints work without a database, and **tests use in-memory
+pglite** (`src/db/testing.ts`) — no database required.
+
+First-time setup, from empty:
+
+```bash
+docker compose up -d                          # start an empty Postgres (db: qa_copilot, role qa/qa)
+pnpm --filter @qa-copilot/server db:migrate   # create the schema — applies ./drizzle/*.sql
+```
+
+`docker compose up -d` (root `docker-compose.yml`) provisions the empty database that
+matches the default `DATABASE_URL`; `db:migrate` (`src/db/migrate.ts`) builds the
+tables. The platform endpoints mount only when `DATABASE_URL`, `JWT_SECRET`, and
+`MASTER_ENCRYPTION_KEY` are all set.
+
+After editing `src/db/schema.ts`, generate then apply a migration:
+
+```bash
+pnpm --filter @qa-copilot/server db:generate  # emit a new migration into ./drizzle
+pnpm --filter @qa-copilot/server db:migrate   # apply it
+```
+
+Reset to a clean database (drops all data):
+
+```bash
+docker compose down -v && docker compose up -d
+pnpm --filter @qa-copilot/server db:migrate
 ```
 
 ---

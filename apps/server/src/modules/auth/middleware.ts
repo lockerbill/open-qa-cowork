@@ -39,6 +39,11 @@ export function requireMember(db: Database, ...allowedRoles: WorkspaceRole[]): R
     if (!membership || membership.status === 'disabled') {
       throw new ApiError(404, 'Workspace not found');
     }
+    // Invited members exist but have not accepted yet — they know the workspace
+    // exists (they were invited), so a 403 leaks nothing.
+    if (membership.status === 'invited') {
+      throw new ApiError(403, 'Accept your workspace invite before accessing it');
+    }
     if (allowedRoles.length > 0 && !allowedRoles.includes(membership.role as WorkspaceRole)) {
       throw new ApiError(403, 'You do not have permission to perform this action');
     }

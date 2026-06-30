@@ -7,8 +7,10 @@ import { writeAudit } from '../../audit/index.js';
 import { authMiddleware, requireMember } from '../auth/middleware.js';
 import { getUserByEmail } from '../auth/service.js';
 import {
+  acceptInvite,
   addMember,
   createWorkspace,
+  declineInvite,
   getMembership,
   getWorkspaceForUser,
   listWorkspacesForUser,
@@ -33,7 +35,12 @@ export function workspacesRouter(db: Database, jwtSecret: string): Router {
     asyncHandler(async (req, res) => {
       const rows = await listWorkspacesForUser(db, req.user!.id);
       res.json({
-        workspaces: rows.map((r) => ({ id: r.workspace.id, name: r.workspace.name, role: r.role })),
+        workspaces: rows.map((r) => ({
+          id: r.workspace.id,
+          name: r.workspace.name,
+          role: r.role,
+          status: r.status,
+        })),
       });
     }),
   );
@@ -81,6 +88,25 @@ export function workspacesRouter(db: Database, jwtSecret: string): Router {
         metadata: { email: body.email, role: body.role },
       });
       res.status(201).json({ id: membership.id, role: membership.role, status: membership.status });
+    }),
+  );
+
+  // Accept / decline a pending invite. These must work for `invited` members, so
+  // they are NOT behind requireMember (which blocks invited) — the service does
+  // its own membership + status check.
+  router.post(
+    '/:workspaceId/members/accept',
+    asyncHandler(async (req, res) => {
+      const membership = await acceptInvite(db, req.params.workspaceId!, req.user!.id);
+      res.json({ id: membership.id, role: membership.role, status: membership.status });
+    }),
+  );
+
+  router.post(
+    '/:workspaceId/members/decline',
+    asyncHandler(async (req, res) => {
+      await declineInvite(db, req.params.workspaceId!, req.user!.id);
+      res.status(204).end();
     }),
   );
 

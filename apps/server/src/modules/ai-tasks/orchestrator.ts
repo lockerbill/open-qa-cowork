@@ -9,7 +9,10 @@ import { stripFences } from '../../http/util.js';
 import type { Logger } from '../../logging/logger.js';
 import { LLMError, type LLMProvider } from '../../llm/types.js';
 import { LoggingProvider } from '../../llm/logging-provider.js';
-import { openAICompatibleComplete } from '../../llm/openai-compatible.js';
+import {
+  openAICompatibleCompleteWithUsage,
+  type CompletionUsage,
+} from '../../llm/openai-compatible.js';
 import { bugReportSystem, bugReportUser } from '../../prompts/index.js';
 import { readSecretForUse } from '../secrets/service.js';
 import { assertSafeProviderUrl } from '../providers/ssrf.js';
@@ -35,16 +38,21 @@ export interface BugReportResult {
   usage: { inputTokens: number | null; outputTokens: number | null };
 }
 
-/** Build an LLM provider for a resolved config, traced by LoggingProvider. */
+/**
+ * Build an LLM provider for a resolved config, traced by LoggingProvider. Token
+ * usage from the provider response is written into `usageSink` on each call so
+ * the caller can record it.
+ */
 function providerFor(
   config: { baseUrl: string; modelName: string; displayName: string; timeoutSeconds: number },
   apiKey: string,
   logger: Logger,
+  usageSink: CompletionUsage,
 ): LLMProvider {
   const inner: LLMProvider = {
     name: 'openai_compatible',
-    complete: (opts) =>
-      openAICompatibleComplete(
+    complete: async (opts) => {
+      const { text, usage } = await openAICompatibleCompleteWithUsage(
         {
           baseUrl: config.baseUrl,
           apiKey,
@@ -55,7 +63,11 @@ function providerFor(
           redirect: 'error',
         },
         opts,
-      ),
+      );
+      usageSink.inputTokens = usage.inputTokens;
+      usageSink.outputTokens = usage.outputTokens;
+      return text;
+    },
   };
   return new LoggingProvider(inner, logger, config.modelName);
 }
@@ -101,9 +113,10 @@ export async function runGenerateBugReport(
   });
 
   const start = Date.now();
+  const usage: CompletionUsage = { inputTokens: null, outputTokens: null };
   try {
     const apiKey = await readSecretForUse(db, masterKey, config.secretId);
-    const provider = providerFor(config, apiKey, logger);
+    const provider = providerFor(config, apiKey, logger, usage);
 
     // bugReportUser() wraps the session/pageModel via asUntrustedData(), which
     // re-redacts the content before it ever reaches the provider.
@@ -121,7 +134,13 @@ export async function runGenerateBugReport(
 
     await db
       .update(aiTaskRuns)
-      .set({ status: 'succeeded', completedAt: new Date(), durationMs: Date.now() - start })
+      .set({
+        status: 'succeeded',
+        completedAt: new Date(),
+        durationMs: Date.now() - start,
+        inputTokenCount: usage.inputTokens,
+        outputTokenCount: usage.outputTokens,
+      })
       .where(eq(aiTaskRuns.id, taskRunId));
     await db.insert(usageLogs).values({
       id: genId('usage'),
@@ -130,6 +149,8 @@ export async function runGenerateBugReport(
       llmProviderConfigId: config.id,
       taskType: 'generate_bug_report',
       modelName: config.modelName,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
     });
     await writeAudit(db, {
       workspaceId: ctx.workspaceId,
@@ -139,7 +160,7 @@ export async function runGenerateBugReport(
       resourceId: taskRunId,
     });
 
-    return { taskRunId, bugReport: { content, format: 'markdown' }, usage: { inputTokens: null, outputTokens: null } };
+    return { taskRunId, bugReport: { content, format: 'markdown' }, usage };
   } catch (err) {
     const status = err instanceof LLMError ? err.status : undefined;
     await db
