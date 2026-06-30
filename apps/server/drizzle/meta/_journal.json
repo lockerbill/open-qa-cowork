@@ -29,6 +29,13 @@
       "when": 1782812107767,
       "tag": "0003_absent_shiver_man",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782826222278,
+      "tag": "0004_stiff_hawkeye",
+      "breakpoints": true
     }
   ]
 }

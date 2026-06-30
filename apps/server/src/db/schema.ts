@@ -6,6 +6,7 @@
  *   Stage 2 — secrets
  *   Stage 3 — llmProviderConfigs (+ workspaces.defaultLlmProviderConfigId)
  *   Stage 4 — aiTaskRuns, usageLogs
+ *   Stage 5 — projects, environmentProfiles
  *
  * Run `pnpm --filter @qa-copilot/server db:generate` after editing to emit a
  * migration into ./drizzle, then `db:migrate` to apply it to Postgres.
@@ -142,6 +143,70 @@ export const llmProviderConfigs = pgTable('llm_provider_configs', {
   lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
   validationStatus: text('validation_status').notNull().default('unknown'), // unknown | valid | invalid
   validationError: text('validation_error'),
+});
+
+/**
+ * Stage 5 — a product/app under test inside a workspace. `key` is a short
+ * human label (e.g. ERP) unique within the workspace. `defaultEnvironmentId` is
+ * a soft pointer to an environmentProfiles row (no hard FK — avoids a circular
+ * dependency with environment_profiles.project_id); it is validated in the
+ * service when set. `redactionPolicyId` is a nullable passthrough — there is no
+ * RedactionPolicy table this milestone.
+ */
+export const projects = pgTable(
+  'projects',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    name: text('name').notNull(),
+    key: text('key').notNull(),
+    description: text('description'),
+    defaultEnvironmentId: text('default_environment_id'),
+    defaultLlmProviderConfigId: text('default_llm_provider_config_id'),
+    redactionPolicyId: text('redaction_policy_id'),
+    createdByUserId: text('created_by_user_id').notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (t) => ({
+    uniqKey: uniqueIndex('uniq_project_workspace_key').on(t.workspaceId, t.key),
+  }),
+);
+
+/**
+ * Stage 5 — a named environment for a project (local/dev/staging/uat/production
+ * /custom). `baseUrl` (nullable) is matched against a tab URL to detect the
+ * active environment. The boolean flags gate what the AI is allowed to do per
+ * environment; safe defaults are seeded by name (see modules/projects/env-defaults).
+ */
+export const environmentProfiles = pgTable('environment_profiles', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  projectId: text('project_id')
+    .notNull()
+    .references(() => projects.id),
+  name: text('name').notNull(), // local | dev | staging | uat | production | custom
+  displayName: text('display_name').notNull(),
+  baseUrl: text('base_url'),
+  allowAiObserve: boolean('allow_ai_observe').notNull().default(true),
+  allowAiGenerate: boolean('allow_ai_generate').notNull().default(true),
+  allowAiExecute: boolean('allow_ai_execute').notNull().default(false),
+  allowAutoSubmit: boolean('allow_auto_submit').notNull().default(false),
+  requireConfirmationBeforeSubmit: boolean('require_confirmation_before_submit')
+    .notNull()
+    .default(true),
+  requireConfirmationBeforeAttachmentUpload: boolean(
+    'require_confirmation_before_attachment_upload',
+  )
+    .notNull()
+    .default(true),
+  redactionPolicyId: text('redaction_policy_id'),
+  createdAt,
+  updatedAt,
 });
 
 /** Stage 4 — one row per AI task execution. Never stores unredacted prompt content. */
