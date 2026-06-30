@@ -29,7 +29,7 @@ ANTHROPIC_API_KEY=sk-ant-...      # or OPENAI_API_KEY=sk-... when provider=opena
 ANTHROPIC_MODEL=claude-sonnet-4-6 # optional override
 # Multi-user platform (optional — the auth/workspace/BYO-LLM endpoints mount only
 # when all three are set; see the Database section below):
-DATABASE_URL=postgres://qa:qa@localhost:5432/qa_copilot
+DATABASE_URL=postgres://qa:qa@localhost:5433/qa_copilot
 JWT_SECRET=                       # long random string; signs auth JWTs
 MASTER_ENCRYPTION_KEY=            # base64 32 bytes: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 # OpenRouter (OpenAI-compatible gateway to many models) when provider=openrouter:
@@ -61,6 +61,12 @@ pnpm --filter @qa-copilot/server db:migrate   # create the schema — applies ./
 matches the default `DATABASE_URL`; `db:migrate` (`src/db/migrate.ts`) builds the
 tables. The platform endpoints mount only when `DATABASE_URL`, `JWT_SECRET`, and
 `MASTER_ENCRYPTION_KEY` are all set.
+
+> **Port note:** the container publishes on host port **5433** (mapped to 5432
+> inside), so it won't collide with other local Postgres stacks that grab 5432.
+> If `db:migrate` fails with `permission denied for schema public`, you're almost
+> certainly pointed at a *different* Postgres on 5432 — confirm `docker compose ps`
+> shows this stack's `postgres` Up on 5433 and that `DATABASE_URL` uses 5433.
 
 After editing `src/db/schema.ts`, generate then apply a migration:
 
