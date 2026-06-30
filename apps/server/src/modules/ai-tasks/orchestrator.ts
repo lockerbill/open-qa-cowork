@@ -5,7 +5,7 @@ import { genId } from '../../db/id.js';
 import { aiTaskRuns, usageLogs } from '../../db/schema.js';
 import { writeAudit } from '../../audit/index.js';
 import { ApiError } from '../../http/errors.js';
-import { stripFences } from '../../http/util.js';
+import { artifactId, parseJsonLoose, stripFences } from '../../http/util.js';
 import type { Logger } from '../../logging/logger.js';
 import { LLMError, type LLMProvider } from '../../llm/types.js';
 import { LoggingProvider } from '../../llm/logging-provider.js';
@@ -13,7 +13,16 @@ import {
   openAICompatibleCompleteWithUsage,
   type CompletionUsage,
 } from '../../llm/openai-compatible.js';
-import { bugReportSystem, bugReportUser } from '../../prompts/index.js';
+import {
+  analyzeSystem,
+  analyzeUser,
+  bugReportSystem,
+  bugReportUser,
+  playwrightEnrichSystem,
+  playwrightEnrichUser,
+  testCasesSystem,
+  testCasesUser,
+} from '../../prompts/index.js';
 import { readSecretForUse } from '../secrets/service.js';
 import { assertSafeProviderUrl } from '../providers/ssrf.js';
 import { resolveProviderConfig } from './resolver.js';
@@ -25,16 +34,28 @@ export interface AiTaskDeps {
   allowPrivateHosts: boolean;
 }
 
-export interface BugReportInput {
-  session: unknown;
-  pageModel?: unknown;
-  userNote?: string;
+export interface AiTaskContext {
+  workspaceId: string;
+  userId: string;
+  projectId?: string;
+  environmentId?: string;
   sessionId?: string;
 }
 
-export interface BugReportResult {
+/**
+ * Describes one kind of AI task: how to build its prompt and shape its result.
+ * The lifecycle around it (resolve provider, redact, record run/usage/audit) is
+ * shared by `runAiTask`.
+ */
+export interface AiTaskSpec<I, R> {
+  taskType: string;
+  build: (input: I) => { system: string; user: string; maxTokens?: number };
+  shape: (rawText: string) => R;
+}
+
+export interface AiTaskResult<R> {
   taskRunId: string;
-  bugReport: { content: string; format: 'markdown' };
+  result: R;
   usage: { inputTokens: number | null; outputTokens: number | null };
 }
 
@@ -73,23 +94,17 @@ function providerFor(
 }
 
 /**
- * Generate a bug report through the gateway: resolve the workspace provider,
- * decrypt its key, redact + build the prompt, call the provider, and record an
+ * Run any AI task through the gateway: resolve the (layered) provider, decrypt
+ * its key, redact + build the prompt, call the provider, and record an
  * AiTaskRun + UsageLog + audit events. Records a failed run (with a correlation
  * id) before surfacing a safe error.
  */
-export interface AiTaskContext {
-  workspaceId: string;
-  userId: string;
-  projectId?: string;
-  environmentId?: string;
-}
-
-export async function runGenerateBugReport(
+export async function runAiTask<I, R>(
   deps: AiTaskDeps,
   ctx: AiTaskContext,
-  input: BugReportInput,
-): Promise<BugReportResult> {
+  spec: AiTaskSpec<I, R>,
+  input: I,
+): Promise<AiTaskResult<R>> {
   const { db, masterKey, logger } = deps;
   const config = await resolveProviderConfig(db, ctx.workspaceId, ctx.projectId);
   // Re-check the stored base URL before any server-side request (SSRF guard).
@@ -102,9 +117,9 @@ export async function runGenerateBugReport(
       workspaceId: ctx.workspaceId,
       projectId: ctx.projectId ?? null,
       environmentId: ctx.environmentId ?? null,
-      sessionId: input.sessionId ?? null,
+      sessionId: ctx.sessionId ?? null,
       userId: ctx.userId,
-      taskType: 'generate_bug_report',
+      taskType: spec.taskType,
       llmProviderConfigId: config.id,
       modelName: config.modelName,
       status: 'running',
@@ -118,7 +133,7 @@ export async function runGenerateBugReport(
     action: 'ai_task.started',
     resourceType: 'ai_task_run',
     resourceId: taskRunId,
-    metadata: { taskType: 'generate_bug_report' },
+    metadata: { taskType: spec.taskType },
   });
 
   const start = Date.now();
@@ -127,19 +142,15 @@ export async function runGenerateBugReport(
     const apiKey = await readSecretForUse(db, masterKey, config.secretId);
     const provider = providerFor(config, apiKey, logger, usage);
 
-    // bugReportUser() wraps the session/pageModel via asUntrustedData(), which
+    // The prompt builders wrap session/pageModel via asUntrustedData(), which
     // re-redacts the content before it ever reaches the provider.
-    const content = stripFences(
-      await provider.complete({
-        system: bugReportSystem(),
-        user: bugReportUser(
-          input.session as TestSession,
-          (input.pageModel ?? null) as PageModel | null,
-          input.userNote ?? '',
-        ),
-        maxTokens: config.maxOutputTokens,
-      }),
-    );
+    const built = spec.build(input);
+    const raw = await provider.complete({
+      system: built.system,
+      user: built.user,
+      maxTokens: built.maxTokens ?? config.maxOutputTokens,
+    });
+    const result = spec.shape(raw);
 
     await db
       .update(aiTaskRuns)
@@ -157,7 +168,7 @@ export async function runGenerateBugReport(
       userId: ctx.userId,
       projectId: ctx.projectId ?? null,
       llmProviderConfigId: config.id,
-      taskType: 'generate_bug_report',
+      taskType: spec.taskType,
       modelName: config.modelName,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
@@ -170,7 +181,7 @@ export async function runGenerateBugReport(
       resourceId: taskRunId,
     });
 
-    return { taskRunId, bugReport: { content, format: 'markdown' }, usage };
+    return { taskRunId, result, usage };
   } catch (err) {
     const status = err instanceof LLMError ? err.status : undefined;
     await db
@@ -189,13 +200,171 @@ export async function runGenerateBugReport(
       action: 'ai_task.failed',
       resourceType: 'ai_task_run',
       resourceId: taskRunId,
-      metadata: { status: status ?? null },
+      metadata: { status: status ?? null, taskType: spec.taskType },
     });
     throw new ApiError(
       502,
-      'Bug report generation failed. The selected AI provider could not be reached. Try again or ask your workspace admin to check the provider settings.',
+      'AI task failed. The selected AI provider could not be reached. Try again or ask your workspace admin to check the provider settings.',
       'ai_task_failed',
       { taskRunId },
     );
   }
+}
+
+// --- Task definitions ---------------------------------------------------------
+
+export interface BugReportInput {
+  session: unknown;
+  pageModel?: unknown;
+  userNote?: string;
+  sessionId?: string;
+}
+
+export interface BugReportResult {
+  taskRunId: string;
+  bugReport: { content: string; format: 'markdown' };
+  usage: { inputTokens: number | null; outputTokens: number | null };
+}
+
+export async function runGenerateBugReport(
+  deps: AiTaskDeps,
+  ctx: AiTaskContext,
+  input: BugReportInput,
+): Promise<BugReportResult> {
+  const { taskRunId, result, usage } = await runAiTask(
+    deps,
+    { ...ctx, sessionId: ctx.sessionId ?? input.sessionId },
+    {
+      taskType: 'generate_bug_report',
+      build: (i: BugReportInput) => ({
+        system: bugReportSystem(),
+        user: bugReportUser(
+          i.session as TestSession,
+          (i.pageModel ?? null) as PageModel | null,
+          i.userNote ?? '',
+        ),
+      }),
+      shape: (raw) => ({ content: stripFences(raw), format: 'markdown' as const }),
+    },
+    input,
+  );
+  return { taskRunId, bugReport: result, usage };
+}
+
+export interface AnalyzePageInput {
+  pageModel: unknown;
+  question?: string;
+}
+
+export interface AnalyzePageResult {
+  taskRunId: string;
+  result: { summary: string; risks: string[]; suggestedTests: string[] };
+}
+
+export async function runAnalyzePage(
+  deps: AiTaskDeps,
+  ctx: AiTaskContext,
+  input: AnalyzePageInput,
+): Promise<AnalyzePageResult> {
+  const { taskRunId, result } = await runAiTask(
+    deps,
+    ctx,
+    {
+      taskType: 'analyze_page',
+      build: (i: AnalyzePageInput) => ({
+        system: analyzeSystem(),
+        user: analyzeUser(i.pageModel as PageModel, i.question),
+        maxTokens: 2048,
+      }),
+      shape: (raw): { summary: string; risks: string[]; suggestedTests: string[] } => {
+        const parsed = parseJsonLoose<{
+          summary: string;
+          risks: string[];
+          suggestedTests: string[];
+        }>(raw);
+        if (!parsed) {
+          // Truncated/malformed JSON: show prose, but never leak broken JSON.
+          const looksJson = raw.trim().startsWith('{');
+          return {
+            summary: looksJson
+              ? 'The model returned malformed or truncated JSON. Try again, or raise the provider max output tokens.'
+              : raw.trim(),
+            risks: [],
+            suggestedTests: [],
+          };
+        }
+        return {
+          summary: parsed.summary,
+          risks: parsed.risks ?? [],
+          suggestedTests: parsed.suggestedTests ?? [],
+        };
+      },
+    },
+    input,
+  );
+  return { taskRunId, result };
+}
+
+export interface TestCasesInput {
+  pageModel: unknown;
+  focus?: string;
+}
+
+export interface ArtifactResult {
+  taskRunId: string;
+  result: { artifactId: string; type: string; format: string; content: string };
+}
+
+export async function runGenerateTestCases(
+  deps: AiTaskDeps,
+  ctx: AiTaskContext,
+  input: TestCasesInput,
+): Promise<ArtifactResult> {
+  const { taskRunId, result } = await runAiTask(
+    deps,
+    ctx,
+    {
+      taskType: 'generate_test_cases',
+      build: (i: TestCasesInput) => ({
+        system: testCasesSystem(),
+        user: testCasesUser(i.pageModel as PageModel, i.focus),
+        maxTokens: 3072,
+      }),
+      shape: (raw) => ({
+        artifactId: artifactId(),
+        type: 'test_cases',
+        format: 'markdown',
+        content: stripFences(raw),
+      }),
+    },
+    input,
+  );
+  return { taskRunId, result };
+}
+
+export interface EnrichPlaywrightResult {
+  taskRunId: string;
+  content: string;
+}
+
+export async function runEnrichPlaywright(
+  deps: AiTaskDeps,
+  ctx: AiTaskContext,
+  input: { specContent: string },
+): Promise<EnrichPlaywrightResult> {
+  const { taskRunId, result } = await runAiTask(
+    deps,
+    ctx,
+    {
+      taskType: 'enrich_playwright',
+      build: (i: { specContent: string }) => ({
+        system: playwrightEnrichSystem(),
+        user: playwrightEnrichUser(i.specContent),
+        maxTokens: 2048,
+      }),
+      shape: (raw) => ({ content: stripFences(raw) }),
+    },
+    input,
+  );
+  return { taskRunId, content: result.content };
 }

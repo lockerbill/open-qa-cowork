@@ -72,6 +72,11 @@ export function createApp(
     app.use('/api/workspaces', workspacesRouter(db, jwtSecret));
   }
 
+  // --- Legacy unauthed AI endpoints (env-driven provider; no auth/usage/audit).
+  // Kept as an extension fallback. The authed, workspace-scoped equivalents live
+  // under /api/workspaces/:workspaceId/ai/tasks (analyze-page, generate-test-cases,
+  // generate-bug-report, enrich-playwright). ---
+
   // --- POST /api/page/analyze ---
   app.post(
     '/api/page/analyze',

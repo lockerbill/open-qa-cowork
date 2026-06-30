@@ -146,3 +146,29 @@ export const createEnvironmentSchema = z.object({
 });
 
 export const resolveUrlQuerySchema = z.object({ url: z.string().url() });
+
+// --- Authed gateway equivalents of the legacy /api/generate/* tasks ---
+
+const aiTaskContextFields = {
+  projectId: z.string().optional(),
+  environmentId: z.string().optional(),
+  sessionId: z.string().optional(),
+};
+
+export const aiAnalyzePageSchema = z.object({
+  pageModel: pageModelSchema,
+  question: z.string().optional(),
+  ...aiTaskContextFields,
+});
+
+export const aiGenerateTestCasesSchema = z.object({
+  pageModel: pageModelSchema,
+  focus: z.string().optional(),
+  ...aiTaskContextFields,
+});
+
+export const aiEnrichPlaywrightSchema = z.object({
+  session: sessionSchema,
+  enrich: z.boolean().optional(),
+  ...aiTaskContextFields,
+});
