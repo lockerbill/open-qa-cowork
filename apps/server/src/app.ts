@@ -5,6 +5,7 @@ import { LLMError, type LLMProvider } from './llm/index.js';
 import {
   analyzeSchema,
   bugReportSchema,
+  chatSchema,
   playwrightSchema,
   testCasesSchema,
 } from './http/schemas.js';
@@ -16,6 +17,7 @@ import {
   analyzeUser,
   bugReportSystem,
   bugReportUser,
+  chatSystem,
   playwrightEnrichSystem,
   playwrightEnrichUser,
   testCasesSystem,
@@ -144,6 +146,21 @@ export function createApp(provider: LLMProvider, logger: Logger = defaultLogger(
         content,
         selectorWarnings: spec.selectorWarnings,
       });
+    }),
+  );
+
+  // --- POST /api/chat (free-form multi-turn chat) ---
+  app.post(
+    '/api/chat',
+    asyncHandler(async (req, res) => {
+      const body = chatSchema.parse(req.body);
+      const content = await provider.chat({
+        messages: [{ role: 'system', content: chatSystem() }, ...body.messages],
+        maxTokens: body.maxTokens ?? 2048,
+      });
+      // Return raw text — unlike the generate routes we keep fenced code blocks,
+      // which are legitimate chat output.
+      res.json({ content });
     }),
   );
 

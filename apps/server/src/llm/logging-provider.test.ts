@@ -2,13 +2,24 @@ import { describe, it, expect } from 'vitest';
 import type { DestinationStream } from 'pino';
 import { createLogger, type LogLevel } from '../logging/logger.js';
 import { LoggingProvider } from './logging-provider.js';
-import { LLMError, type CompleteOptions, type LLMProvider } from './types.js';
+import {
+  LLMError,
+  type ChatOptions,
+  type CompleteOptions,
+  type LLMProvider,
+} from './types.js';
 
 class StubProvider implements LLMProvider {
   readonly name = 'stub';
   constructor(private readonly behavior: (opts: CompleteOptions) => Promise<string>) {}
   complete(opts: CompleteOptions): Promise<string> {
     return this.behavior(opts);
+  }
+  chat(opts: ChatOptions): Promise<string> {
+    // Reuse the same behavior; flatten messages into the CompleteOptions shape.
+    const system = opts.messages.find((m) => m.role === 'system')?.content ?? '';
+    const user = opts.messages.filter((m) => m.role !== 'system').map((m) => m.content).join('\n');
+    return this.behavior({ system, user, maxTokens: opts.maxTokens });
   }
 }
 
@@ -69,6 +80,28 @@ describe('LoggingProvider', () => {
       expect(line).not.toHaveProperty('user');
       expect(line).not.toHaveProperty('response');
     }
+  });
+
+  it('logs chat request metadata (message count and total chars)', async () => {
+    const { lines, provider } = wrap('info', async () => 'hi back');
+    await provider.chat({
+      messages: [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'hello' },
+      ],
+      maxTokens: 512,
+    });
+
+    const request = lines.find((l) => l.event === 'llm.request');
+    expect(request).toMatchObject({
+      provider: 'stub',
+      model: 'test-model',
+      maxTokens: 512,
+      messageCount: 2,
+      totalChars: 8,
+    });
+    const response = lines.find((l) => l.event === 'llm.response');
+    expect(response).toMatchObject({ ok: true, responseChars: 7 });
   });
 
   it('logs failures with the LLMError status and still rejects', async () => {

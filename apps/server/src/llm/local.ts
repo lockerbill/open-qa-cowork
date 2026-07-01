@@ -1,5 +1,5 @@
-import { openAICompatibleComplete } from './openai-compatible.js';
-import { LLMError, type CompleteOptions, type LLMProvider } from './types.js';
+import { openAICompatibleChat, openAICompatibleComplete } from './openai-compatible.js';
+import { LLMError, type ChatOptions, type CompleteOptions, type LLMProvider } from './types.js';
 
 export interface LocalConfig {
   /** OpenAI-compatible base URL including /v1, e.g. http://localhost:11434/v1 */
@@ -25,7 +25,8 @@ export class LocalProvider implements LLMProvider {
 
   constructor(private readonly cfg: LocalConfig) {}
 
-  async complete(opts: CompleteOptions): Promise<string> {
+  /** Build the shared OpenAI-compatible params, applying the thinking toggle. */
+  private params() {
     if (!this.cfg.baseUrl) throw new LLMError('LOCAL_BASE_URL is not configured', 503);
     if (!this.cfg.model) throw new LLMError('LOCAL_MODEL is not configured', 503);
     // vLLM/SGLang read chat_template_kwargs to toggle a reasoning model's
@@ -34,22 +35,36 @@ export class LocalProvider implements LLMProvider {
     const extraBody = this.cfg.enableThinking
       ? undefined
       : { chat_template_kwargs: { enable_thinking: false } };
-    // LOCAL_MAX_TOKENS acts as a floor: it can only raise a route's request,
-    // never lower it. Routes pass small caps tuned for fast cloud models; local
-    // models are wordier and may need more headroom to finish (avoids truncated
-    // output / finish_reason=length). Unset leaves the route default untouched.
-    const maxTokens = Math.max(opts.maxTokens ?? 0, this.cfg.maxTokens ?? 0) || undefined;
-    return openAICompatibleComplete(
-      {
-        baseUrl: this.cfg.baseUrl,
-        apiKey: this.cfg.apiKey,
-        model: this.cfg.model,
-        label: 'Local LLM',
-        requireApiKey: false,
-        extraBody,
-        timeoutMs: this.cfg.timeoutMs,
-      },
-      { ...opts, maxTokens },
-    );
+    return {
+      baseUrl: this.cfg.baseUrl,
+      apiKey: this.cfg.apiKey,
+      model: this.cfg.model,
+      label: 'Local LLM',
+      requireApiKey: false,
+      extraBody,
+      timeoutMs: this.cfg.timeoutMs,
+    };
+  }
+
+  // LOCAL_MAX_TOKENS acts as a floor: it can only raise a route's request,
+  // never lower it. Routes pass small caps tuned for fast cloud models; local
+  // models are wordier and may need more headroom to finish (avoids truncated
+  // output / finish_reason=length). Unset leaves the route default untouched.
+  private floorTokens(maxTokens?: number): number | undefined {
+    return Math.max(maxTokens ?? 0, this.cfg.maxTokens ?? 0) || undefined;
+  }
+
+  async complete(opts: CompleteOptions): Promise<string> {
+    return openAICompatibleComplete(this.params(), {
+      ...opts,
+      maxTokens: this.floorTokens(opts.maxTokens),
+    });
+  }
+
+  async chat(opts: ChatOptions): Promise<string> {
+    return openAICompatibleChat(this.params(), {
+      ...opts,
+      maxTokens: this.floorTokens(opts.maxTokens),
+    });
   }
 }

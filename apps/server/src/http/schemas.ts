@@ -41,7 +41,23 @@ export const playwrightSchema = z.object({
   enrich: z.boolean().optional(),
 });
 
+export const chatSchema = z.object({
+  // Client sends only user/assistant turns; the server prepends its own system
+  // message. Bounds keep the payload (and token cost) sane.
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().min(1).max(8000),
+      }),
+    )
+    .min(1)
+    .max(40),
+  maxTokens: z.number().int().positive().max(8192).optional(),
+});
+
 export type AnalyzeBody = z.infer<typeof analyzeSchema>;
 export type TestCasesBody = z.infer<typeof testCasesSchema>;
 export type BugReportBody = z.infer<typeof bugReportSchema>;
 export type PlaywrightBody = z.infer<typeof playwrightSchema>;
+export type ChatBody = z.infer<typeof chatSchema>;

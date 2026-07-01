@@ -74,6 +74,15 @@ export function bugReportUser(
     .join('\n');
 }
 
+/** Minimal generic-assistant persona for the free-form Chat tab. */
+export function chatSystem(): string {
+  return [
+    'You are a helpful, knowledgeable assistant.',
+    'Answer clearly and concisely.',
+    'Use Markdown formatting (lists, code blocks, tables) when it improves readability.',
+  ].join('\n');
+}
+
 /** Optional enrichment of a deterministic Playwright draft (comments/assertions only). */
 export function playwrightEnrichSystem(): string {
   return (

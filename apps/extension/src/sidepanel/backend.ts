@@ -14,11 +14,22 @@ export interface GenerateResponse {
   selectorWarnings?: { eventId: string; targetLabel?: string; message: string }[];
 }
 
-async function post<T>(backendUrl: string, path: string, body: unknown): Promise<T> {
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+async function post<T>(
+  backendUrl: string,
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   const res = await fetch(`${backendUrl.replace(/\/$/, '')}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -59,4 +70,12 @@ export function generatePlaywright(
   payload: { session: TestSession; enrich?: boolean },
 ): Promise<GenerateResponse> {
   return post<GenerateResponse>(backendUrl, '/api/generate/playwright', payload);
+}
+
+export function sendChatMessage(
+  backendUrl: string,
+  messages: ChatMessage[],
+  signal?: AbortSignal,
+): Promise<{ content: string }> {
+  return post<{ content: string }>(backendUrl, '/api/chat', { messages }, signal);
 }

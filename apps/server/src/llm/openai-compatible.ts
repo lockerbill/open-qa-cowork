@@ -1,4 +1,4 @@
-import { LLMError, type CompleteOptions } from './types.js';
+import { LLMError, type ChatOptions, type CompleteOptions } from './types.js';
 
 export interface OpenAICompatParams {
   /** Base URL including the version path, e.g. https://api.openai.com/v1 */
@@ -34,13 +34,31 @@ function stripThinkTags(text: string): string {
 }
 
 /**
- * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
- * LM Studio, llama.cpp, vLLM, ...). Shared by the cloud OpenAI provider and the
- * local provider so the request/parse logic lives in one place.
+ * Single-turn completion over any OpenAI-compatible endpoint. Thin wrapper that
+ * frames the system + user prompt as a two-message chat.
  */
 export async function openAICompatibleComplete(
   params: OpenAICompatParams,
   opts: CompleteOptions,
+): Promise<string> {
+  return openAICompatibleChat(params, {
+    messages: [
+      { role: 'system', content: opts.system },
+      { role: 'user', content: opts.user },
+    ],
+    maxTokens: opts.maxTokens,
+  });
+}
+
+/**
+ * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
+ * LM Studio, llama.cpp, vLLM, ...) with a full message history. Shared by the
+ * cloud OpenAI provider and the local provider so the request/parse logic lives
+ * in one place.
+ */
+export async function openAICompatibleChat(
+  params: OpenAICompatParams,
+  opts: ChatOptions,
 ): Promise<string> {
   if (params.requireApiKey && !params.apiKey) {
     throw new LLMError(`${params.label} API key is not configured`, 503);
@@ -62,10 +80,7 @@ export async function openAICompatibleComplete(
       body: JSON.stringify({
         model: params.model,
         max_tokens: opts.maxTokens ?? 2048,
-        messages: [
-          { role: 'system', content: opts.system },
-          { role: 'user', content: opts.user },
-        ],
+        messages: opts.messages,
         ...params.extraBody,
       }),
       signal: controller?.signal,

@@ -13,8 +13,9 @@ import {
 } from './backend.js';
 import { downloadJson, downloadMarkdown, downloadTypeScript } from './exports.js';
 import { previewMarkdown } from './preview.js';
+import { ChatTab } from './ChatTab.js';
 
-type Tab = 'page' | 'session' | 'generate';
+type Tab = 'page' | 'session' | 'generate' | 'chat';
 
 export function App() {
   const [state, setState] = useState<PanelState | null>(null);
@@ -68,12 +69,16 @@ export function App() {
         <button className={tab === 'generate' ? 'active' : ''} onClick={() => setTab('generate')}>
           Generate
         </button>
+        <button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>
+          Chat
+        </button>
       </nav>
 
       <div className="content">
         {tab === 'page' && <PageTab state={state} settings={settings} />}
         {tab === 'session' && <SessionTab state={state} onChange={refresh} />}
         {tab === 'generate' && <GenerateTab state={state} settings={settings} />}
+        {tab === 'chat' && <ChatTab settings={settings} />}
       </div>
     </div>
   );
