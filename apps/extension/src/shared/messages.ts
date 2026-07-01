@@ -24,9 +24,17 @@ export const DEFAULT_SETTINGS: Settings = {
   noDestructiveMode: true,
 };
 
+/** Workspace roles allowed to manage providers/projects (owner/admin). */
+export const MANAGE_ROLES: readonly string[] = ['owner', 'admin'];
+
+/** How the current project/environment context was selected. */
+export type ContextSource = 'auto' | 'manual' | null;
+
 /**
  * Signed-in session for the multi-user platform. The JWT is stored in
- * chrome.storage.local; the extension never holds an LLM API key.
+ * chrome.storage.local; the extension never holds an LLM API key. The
+ * project/environment fields are the working context for gateway AI tasks —
+ * `auto` is filled by URL resolution, `manual` by an explicit user override.
  */
 export interface AuthState {
   token: string | null;
@@ -34,6 +42,11 @@ export interface AuthState {
   currentWorkspaceId: string | null;
   currentWorkspaceName: string | null;
   currentWorkspaceRole: string | null;
+  currentProjectId: string | null;
+  currentProjectName: string | null;
+  currentEnvironmentId: string | null;
+  currentEnvironmentName: string | null;
+  contextSource: ContextSource;
 }
 
 export const EMPTY_AUTH: AuthState = {
@@ -42,7 +55,30 @@ export const EMPTY_AUTH: AuthState = {
   currentWorkspaceId: null,
   currentWorkspaceName: null,
   currentWorkspaceRole: null,
+  currentProjectId: null,
+  currentProjectName: null,
+  currentEnvironmentId: null,
+  currentEnvironmentName: null,
+  contextSource: null,
 };
+
+/** Project/environment matched to a tab URL by the backend `resolve` endpoint. */
+export interface ResolveMatch {
+  project: { id: string; name: string };
+  environment: { id: string; displayName: string };
+}
+
+/** Auth context the side panel renders — the token is never projected. */
+export interface AuthProjection {
+  signedIn: boolean;
+  role: string | null;
+  workspaceId: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  environmentId: string | null;
+  environmentName: string | null;
+  contextSource: ContextSource;
+}
 
 // --- Messages from the side panel / options to the background --------------
 
@@ -56,7 +92,16 @@ export type PanelToBackground =
   | { type: 'OPEN_EXTENSION_SETTINGS' }
   | { type: 'GET_SETTINGS' }
   | { type: 'SAVE_SETTINGS'; settings: Settings }
-  | { type: 'ADD_ALLOWLIST_ORIGIN'; origin: string };
+  | { type: 'ADD_ALLOWLIST_ORIGIN'; origin: string }
+  | { type: 'RESOLVE_ACTIVE_TAB' }
+  | {
+      type: 'SET_CONTEXT';
+      projectId: string | null;
+      projectName: string | null;
+      environmentId: string | null;
+      environmentName: string | null;
+    }
+  | { type: 'CLEAR_CONTEXT_OVERRIDE' };
 
 // --- Messages from the content script to the background --------------------
 
@@ -81,6 +126,7 @@ export interface PanelState {
   recording: boolean;
   activeOrigin: string | null;
   allowed: boolean;
+  auth: AuthProjection;
 }
 
 /** Broadcast event name the background emits when state changes. */

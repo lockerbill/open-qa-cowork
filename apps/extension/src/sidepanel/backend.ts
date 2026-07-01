@@ -1,5 +1,5 @@
 import type { PageModel, TestSession } from '@qa-copilot/shared';
-import type { AuthState } from '../shared/messages.js';
+import type { AuthState, ResolveMatch } from '../shared/messages.js';
 
 export interface AnalyzeResponse {
   summary: string;
@@ -188,6 +188,73 @@ export function setDefaultProvider(
   });
 }
 
+// --- Projects / environments / URL resolution ------------------------------
+
+export interface ProjectSummary {
+  id: string;
+  key: string;
+  name: string;
+}
+export interface EnvironmentSummary {
+  id: string;
+  name: string;
+  displayName: string;
+  baseUrl: string | null;
+}
+
+export function listProjects(
+  backendUrl: string,
+  token: string,
+  workspaceId: string,
+): Promise<{ projects: ProjectSummary[] }> {
+  return api(backendUrl, `/api/workspaces/${workspaceId}/projects`, { token });
+}
+
+export function listEnvironments(
+  backendUrl: string,
+  token: string,
+  workspaceId: string,
+  projectId: string,
+): Promise<{ environments: EnvironmentSummary[] }> {
+  return api(backendUrl, `/api/workspaces/${workspaceId}/projects/${projectId}/environments`, {
+    token,
+  });
+}
+
+export function resolveUrl(
+  backendUrl: string,
+  token: string,
+  workspaceId: string,
+  url: string,
+): Promise<{ match: ResolveMatch | null }> {
+  return api(
+    backendUrl,
+    `/api/workspaces/${workspaceId}/resolve?url=${encodeURIComponent(url)}`,
+    { token },
+  );
+}
+
+// --- Gateway-or-legacy AI tasks --------------------------------------------
+
+/** True when a gateway error should fall back to the legacy stateless endpoint. */
+function canFallback(err: unknown): boolean {
+  return err instanceof ApiClientError && (err.code === 'no_provider' || err.status === 401);
+}
+
+/** Layered-resolution context for a gateway call. Null fields are omitted so
+ * the optional Zod schema fields stay absent rather than `null`. */
+function ctx(auth: AuthState): { projectId?: string; environmentId?: string } {
+  const c: { projectId?: string; environmentId?: string } = {};
+  if (auth.currentProjectId) c.projectId = auth.currentProjectId;
+  if (auth.currentEnvironmentId) c.environmentId = auth.currentEnvironmentId;
+  return c;
+}
+
+/** Whether the signed-in session can use the workspace gateway. */
+function canUseGateway(auth: AuthState): auth is AuthState & { token: string; currentWorkspaceId: string } {
+  return !!auth.token && !!auth.currentWorkspaceId;
+}
+
 interface GatewayBugReport {
   taskRunId: string;
   bugReport: { content: string; format: string };
@@ -205,19 +272,97 @@ export async function generateBugReportSmart(
   auth: AuthState,
   payload: { session: TestSession; pageModel: PageModel | null; userNote: string },
 ): Promise<GenerateResponse> {
-  if (auth.token && auth.currentWorkspaceId) {
+  if (canUseGateway(auth)) {
     try {
       const r = await api<GatewayBugReport>(
         backendUrl,
         `/api/workspaces/${auth.currentWorkspaceId}/ai/tasks/generate-bug-report`,
-        { token: auth.token, body: payload },
+        { token: auth.token, body: { ...payload, ...ctx(auth) } },
       );
       return { artifactId: r.taskRunId, content: r.bugReport.content, format: r.bugReport.format };
     } catch (err) {
-      const fallbackable =
-        err instanceof ApiClientError && (err.code === 'no_provider' || err.status === 401);
-      if (!fallbackable) throw err;
+      if (!canFallback(err)) throw err;
     }
   }
   return generateBugReport(backendUrl, payload);
+}
+
+/**
+ * Analyze the page via the gateway when signed in, else the legacy endpoint.
+ * The `analyze-page` route returns the inner result shape directly
+ * (`{ summary, risks, suggestedTests }` — no `result` wrapper).
+ */
+export async function analyzePageSmart(
+  backendUrl: string,
+  auth: AuthState,
+  payload: { pageModel: PageModel; question?: string; environment?: string },
+): Promise<AnalyzeResponse> {
+  if (canUseGateway(auth)) {
+    try {
+      return await api<AnalyzeResponse>(
+        backendUrl,
+        `/api/workspaces/${auth.currentWorkspaceId}/ai/tasks/analyze-page`,
+        { token: auth.token, body: { pageModel: payload.pageModel, question: payload.question, ...ctx(auth) } },
+      );
+    } catch (err) {
+      if (!canFallback(err)) throw err;
+    }
+  }
+  return analyzePage(backendUrl, payload);
+}
+
+interface GatewayArtifact {
+  artifactId: string;
+  type: string;
+  format: string;
+  content: string;
+}
+
+/**
+ * Generate test cases via the gateway when signed in, else the legacy endpoint.
+ * The `generate-test-cases` route returns `{ artifactId, type, format, content }`
+ * directly (no `result` wrapper).
+ */
+export async function generateTestCasesSmart(
+  backendUrl: string,
+  auth: AuthState,
+  payload: { pageModel: PageModel; focus?: string },
+): Promise<GenerateResponse> {
+  if (canUseGateway(auth)) {
+    try {
+      const r = await api<GatewayArtifact>(
+        backendUrl,
+        `/api/workspaces/${auth.currentWorkspaceId}/ai/tasks/generate-test-cases`,
+        { token: auth.token, body: { pageModel: payload.pageModel, focus: payload.focus, ...ctx(auth) } },
+      );
+      return { artifactId: r.artifactId, content: r.content, format: r.format };
+    } catch (err) {
+      if (!canFallback(err)) throw err;
+    }
+  }
+  return generateTestCases(backendUrl, { pageModel: payload.pageModel, format: 'manual_markdown', focus: payload.focus });
+}
+
+/**
+ * Generate a Playwright draft via the gateway (`enrich-playwright`) when signed
+ * in, else the legacy endpoint. The gateway response already matches
+ * GenerateResponse (artifactId, content, format, filename, selectorWarnings).
+ */
+export async function generatePlaywrightSmart(
+  backendUrl: string,
+  auth: AuthState,
+  payload: { session: TestSession; enrich?: boolean },
+): Promise<GenerateResponse> {
+  if (canUseGateway(auth)) {
+    try {
+      return await api<GenerateResponse>(
+        backendUrl,
+        `/api/workspaces/${auth.currentWorkspaceId}/ai/tasks/enrich-playwright`,
+        { token: auth.token, body: { session: payload.session, enrich: payload.enrich, ...ctx(auth) } },
+      );
+    } catch (err) {
+      if (!canFallback(err)) throw err;
+    }
+  }
+  return generatePlaywright(backendUrl, payload);
 }

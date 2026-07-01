@@ -1,19 +1,44 @@
 import { useCallback, useEffect, useState } from 'react';
 import { buildSessionMarkdown } from '@qa-copilot/shared';
-import type { PanelState, Settings } from '../shared/messages.js';
-import { STATE_CHANGED } from '../shared/messages.js';
+import type { AuthProjection, PanelState, Settings } from '../shared/messages.js';
+import { MANAGE_ROLES, STATE_CHANGED } from '../shared/messages.js';
 import * as bg from './chrome-client.js';
 import { getAuth } from '../shared/storage.js';
 import {
-  analyzePage,
+  ApiClientError,
+  analyzePageSmart,
   generateBugReportSmart,
-  generatePlaywright,
-  generateTestCases,
+  generatePlaywrightSmart,
+  generateTestCasesSmart,
+  listEnvironments,
+  listProjects,
   type AnalyzeResponse,
+  type EnvironmentSummary,
   type GenerateResponse,
+  type ProjectSummary,
 } from './backend.js';
 import { downloadJson, downloadMarkdown, downloadTypeScript } from './exports.js';
 import { previewMarkdown } from './preview.js';
+
+/** Map an AI-task error to a role-aware, user-facing message. */
+function explainError(e: unknown, role: string | null): string {
+  if (e instanceof ApiClientError) {
+    if (e.code === 'no_provider') {
+      return MANAGE_ROLES.includes(role ?? '')
+        ? 'No AI provider is configured for this workspace. Open Settings → AI Provider to configure one.'
+        : 'No AI provider is configured for this workspace. Ask your workspace admin to set one up.';
+    }
+    if (e.status === 403) return "Your role can't run AI tasks. Ask a workspace admin for access.";
+  }
+  return (e as Error).message;
+}
+
+/** Whether to offer the admin a one-click path to provider settings. */
+function showConfigure(e: unknown, role: string | null): boolean {
+  return (
+    e instanceof ApiClientError && e.code === 'no_provider' && MANAGE_ROLES.includes(role ?? '')
+  );
+}
 
 type Tab = 'page' | 'session' | 'generate';
 
@@ -54,6 +79,8 @@ export function App() {
         <div className="url">{summary?.title ?? 'No page scanned'}</div>
         <div className="url">{summary?.url ?? state.activeOrigin ?? ''}</div>
       </header>
+
+      {state.auth.signedIn && settings && <ContextBar auth={state.auth} settings={settings} />}
 
       {!state.allowed && state.activeOrigin && (
         <AllowlistBanner origin={state.activeOrigin} onEnabled={refresh} />
@@ -101,26 +128,147 @@ function AllowlistBanner({ origin, onEnabled }: { origin: string; onEnabled: () 
   );
 }
 
+/**
+ * Shows the current project/environment context (auto-detected from the tab URL
+ * or manually overridden) and lets the user change it or revert to auto-detect.
+ */
+function ContextBar({ auth, settings }: { auth: AuthProjection; settings: Settings }) {
+  const [open, setOpen] = useState(false);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [envs, setEnvs] = useState<EnvironmentSummary[]>([]);
+  const [projectId, setProjectId] = useState('');
+  const [err, setErr] = useState('');
+
+  const openSelector = async () => {
+    setErr('');
+    setOpen(true);
+    try {
+      const a = await getAuth();
+      if (!a.token || !a.currentWorkspaceId) return;
+      const { projects } = await listProjects(settings.backendUrl, a.token, a.currentWorkspaceId);
+      setProjects(projects);
+      setProjectId(auth.projectId ?? projects[0]?.id ?? '');
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  useEffect(() => {
+    if (!open || !projectId) {
+      setEnvs([]);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const a = await getAuth();
+        if (!a.token || !a.currentWorkspaceId) return;
+        const { environments } = await listEnvironments(
+          settings.backendUrl,
+          a.token,
+          a.currentWorkspaceId,
+          projectId,
+        );
+        if (active) setEnvs(environments);
+      } catch (e) {
+        if (active) setErr((e as Error).message);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [open, projectId, settings.backendUrl]);
+
+  const confirm = async (environmentId: string) => {
+    const project = projects.find((p) => p.id === projectId);
+    const environment = envs.find((e) => e.id === environmentId);
+    await bg.setContext({
+      projectId: projectId || null,
+      projectName: project?.name ?? null,
+      environmentId: environmentId || null,
+      environmentName: environment?.displayName ?? null,
+    });
+    setOpen(false);
+  };
+
+  const label = auth.projectName
+    ? `${auth.projectName}${auth.environmentName ? ` · ${auth.environmentName}` : ''}`
+    : 'No project';
+
+  return (
+    <div className="context-bar row">
+      <span className="chip">{label}</span>
+      {auth.contextSource && <span className="muted">({auth.contextSource})</span>}
+      {!open ? (
+        <>
+          <button className="ghost" onClick={openSelector}>
+            Change
+          </button>
+          {auth.contextSource === 'manual' && (
+            <button className="ghost" onClick={() => bg.clearContextOverride()}>
+              Use auto-detect
+            </button>
+          )}
+          <button className="ghost" onClick={() => bg.resolveActiveTab()}>
+            Re-detect
+          </button>
+        </>
+      ) : (
+        <>
+          <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <option value="">— project —</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <select
+            defaultValue={auth.environmentId ?? ''}
+            onChange={(e) => void confirm(e.target.value)}
+            disabled={!projectId}
+          >
+            <option value="">— environment —</option>
+            {envs.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.displayName}
+              </option>
+            ))}
+          </select>
+          <button className="ghost" onClick={() => setOpen(false)}>
+            Cancel
+          </button>
+        </>
+      )}
+      {err && <span className="err">{err}</span>}
+    </div>
+  );
+}
+
 function PageTab({ state, settings }: { state: PanelState; settings: Settings | null }) {
   const summary = state.pageModel?.summary;
   const [answer, setAnswer] = useState<AnalyzeResponse | null>(null);
   const [err, setErr] = useState('');
+  const [canConfig, setCanConfig] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const ask = async () => {
     if (!state.pageModel || !settings) return;
     setBusy(true);
     setErr('');
+    setCanConfig(false);
     try {
+      const auth = await getAuth();
       setAnswer(
-        await analyzePage(settings.backendUrl, {
+        await analyzePageSmart(settings.backendUrl, auth, {
           pageModel: state.pageModel,
           question: 'What should I test on this page?',
           environment: settings.environment,
         }),
       );
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(explainError(e, state.auth.role));
+      setCanConfig(showConfigure(e, state.auth.role));
     } finally {
       setBusy(false);
     }
@@ -137,7 +285,16 @@ function PageTab({ state, settings }: { state: PanelState; settings: Settings | 
         </button>
       </div>
 
-      {err && <p className="err">{err}</p>}
+      {err && (
+        <div className="row">
+          <span className="err">{err}</span>
+          {canConfig && (
+            <button className="ghost" onClick={() => bg.openExtensionSettings()}>
+              Configure Provider
+            </button>
+          )}
+        </div>
+      )}
 
       {answer && (
         <>
@@ -349,13 +506,17 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
+  const [canConfig, setCanConfig] = useState(false);
+
   const run = async (key: string, fn: () => Promise<void>) => {
     setBusy(key);
     setErr('');
+    setCanConfig(false);
     try {
       await fn();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(explainError(e, state.auth.role));
+      setCanConfig(showConfigure(e, state.auth.role));
     } finally {
       setBusy(null);
     }
@@ -371,10 +532,10 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
         disabled={!state.pageModel || busy !== null}
         onClick={() =>
           run('tc', async () => {
+            const auth = await getAuth();
             setTc(
-              await generateTestCases(settings.backendUrl, {
+              await generateTestCasesSmart(settings.backendUrl, auth, {
                 pageModel: state.pageModel!,
-                format: 'manual_markdown',
               }),
             );
           })
@@ -432,7 +593,8 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
         disabled={busy !== null || state.session.events.length === 0}
         onClick={() =>
           run('pw', async () => {
-            setPw(await generatePlaywright(settings.backendUrl, { session: state.session }));
+            const auth = await getAuth();
+            setPw(await generatePlaywrightSmart(settings.backendUrl, auth, { session: state.session }));
           })
         }
       >
@@ -446,7 +608,16 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
         />
       )}
 
-      {err && <p className="err">{err}</p>}
+      {err && (
+        <div className="row">
+          <span className="err">{err}</span>
+          {canConfig && (
+            <button className="ghost" onClick={() => bg.openExtensionSettings()}>
+              Configure Provider
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

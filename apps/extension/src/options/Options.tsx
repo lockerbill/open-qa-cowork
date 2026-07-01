@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { DEFAULT_SETTINGS, EMPTY_AUTH, type AuthState, type Settings } from '../shared/messages.js';
+import {
+  DEFAULT_SETTINGS,
+  EMPTY_AUTH,
+  MANAGE_ROLES,
+  type AuthState,
+  type Settings,
+} from '../shared/messages.js';
 import { getAuth, saveAuth, clearAuth } from '../shared/storage.js';
 import * as bg from '../sidepanel/chrome-client.js';
 import {
@@ -13,8 +19,6 @@ import {
   validateProvider,
   type ProviderConfigView,
 } from '../sidepanel/backend.js';
-
-const MANAGE_ROLES = ['owner', 'admin'];
 
 export function Options() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -132,6 +136,7 @@ function AccountSection({ backendUrl }: { backendUrl: string }) {
     try {
       const res = await register(backendUrl, { email, password });
       await applyAuth({
+        ...EMPTY_AUTH,
         token: res.token,
         userEmail: res.user.email,
         currentWorkspaceId: res.workspace?.id ?? null,
@@ -154,6 +159,7 @@ function AccountSection({ backendUrl }: { backendUrl: string }) {
       const { workspaces } = await listWorkspaces(backendUrl, res.token);
       const ws = workspaces[0];
       await applyAuth({
+        ...EMPTY_AUTH,
         token: res.token,
         userEmail: res.user.email,
         currentWorkspaceId: ws?.id ?? null,

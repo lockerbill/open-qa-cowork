@@ -50,6 +50,14 @@ export async function clearAuth(): Promise<void> {
   await chrome.storage.local.set({ [AUTH_KEY]: EMPTY_AUTH });
 }
 
+/** Read-modify-write the stored auth. Callers serialize via the background mutex. */
+export async function updateAuth(mutate: (auth: AuthState) => void): Promise<AuthState> {
+  const auth = await getAuth();
+  mutate(auth);
+  await saveAuth(auth);
+  return auth;
+}
+
 export async function getPageModel(): Promise<PageModel | null> {
   const stored = await chrome.storage.local.get(PAGE_MODEL_KEY);
   return (stored[PAGE_MODEL_KEY] as PageModel | undefined) ?? null;
