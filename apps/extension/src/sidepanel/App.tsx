@@ -248,6 +248,8 @@ function ContextBar({ auth, settings }: { auth: AuthProjection; settings: Settin
       {err && <span className="err">{err}</span>}
     </div>
   );
+}
+
 function formatAnalyzePreview(answer: AnalyzeResponse): string {
   const lines = ['# AI suggestions', '', answer.summary];
 

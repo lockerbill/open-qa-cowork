@@ -27,10 +27,20 @@ export class ApiClientError extends Error {
   }
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 async function api<T>(
   backendUrl: string,
   path: string,
-  opts: { method?: string; body?: unknown; token?: string | null } = {},
+  opts: {
+    method?: string;
+    body?: unknown;
+    token?: string | null;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
@@ -38,22 +48,7 @@ async function api<T>(
     method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-async function post<T>(
-  backendUrl: string,
-  path: string,
-  body: unknown,
-  signal?: AbortSignal,
-): Promise<T> {
-  const res = await fetch(`${backendUrl.replace(/\/$/, '')}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
+    signal: opts.signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -388,5 +383,5 @@ export function sendChatMessage(
   messages: ChatMessage[],
   signal?: AbortSignal,
 ): Promise<{ content: string }> {
-  return post<{ content: string }>(backendUrl, '/api/chat', { messages }, signal);
+  return api<{ content: string }>(backendUrl, '/api/chat', { body: { messages }, signal });
 }

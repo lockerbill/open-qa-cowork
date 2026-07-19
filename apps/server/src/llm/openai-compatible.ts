@@ -53,15 +53,12 @@ function stripThinkTags(text: string): string {
  * Like {@link openAICompatibleComplete} but also returns the provider's token
  * usage (`prompt_tokens` / `completion_tokens`, null when the server omits
  * them). Used by the audited workspace gateway to record usage.
- * Single-turn completion over any OpenAI-compatible endpoint. Thin wrapper that
- * frames the system + user prompt as a two-message chat.
  */
 export async function openAICompatibleCompleteWithUsage(
   params: OpenAICompatParams,
   opts: CompleteOptions,
 ): Promise<CompletionWithUsage> {
-): Promise<string> {
-  return openAICompatibleChat(params, {
+  return openAICompatibleChatWithUsage(params, {
     messages: [
       { role: 'system', content: opts.system },
       { role: 'user', content: opts.user },
@@ -72,14 +69,14 @@ export async function openAICompatibleCompleteWithUsage(
 
 /**
  * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
- * LM Studio, llama.cpp, vLLM, ...) with a full message history. Shared by the
- * cloud OpenAI provider and the local provider so the request/parse logic lives
- * in one place.
+ * LM Studio, llama.cpp, vLLM, ...) with a full message history, returning the
+ * completion text alongside the provider's token usage. This is the single
+ * place the request/parse logic lives; every other helper here wraps it.
  */
-export async function openAICompatibleChat(
+export async function openAICompatibleChatWithUsage(
   params: OpenAICompatParams,
   opts: ChatOptions,
-): Promise<string> {
+): Promise<CompletionWithUsage> {
   if (params.requireApiKey && !params.apiKey) {
     throw new LLMError(`${params.label} API key is not configured`, 503);
   }
@@ -142,9 +139,21 @@ export async function openAICompatibleChat(
 }
 
 /**
- * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
- * LM Studio, llama.cpp, vLLM, ...). Shared by the cloud OpenAI provider and the
- * local provider so the request/parse logic lives in one place. Returns only the
+ * Multi-turn chat over any OpenAI-compatible endpoint. Returns only the
+ * completion text; use {@link openAICompatibleChatWithUsage} when token usage
+ * is needed.
+ */
+export async function openAICompatibleChat(
+  params: OpenAICompatParams,
+  opts: ChatOptions,
+): Promise<string> {
+  const { text } = await openAICompatibleChatWithUsage(params, opts);
+  return text;
+}
+
+/**
+ * Single-turn completion over any OpenAI-compatible endpoint. Thin wrapper that
+ * frames the system + user prompt as a two-message chat. Returns only the
  * completion text; use {@link openAICompatibleCompleteWithUsage} when token
  * usage is needed.
  */
