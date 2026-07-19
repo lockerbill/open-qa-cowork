@@ -10,6 +10,7 @@ import type { Logger } from '../../logging/logger.js';
 import { LLMError, type LLMProvider } from '../../llm/types.js';
 import { LoggingProvider } from '../../llm/logging-provider.js';
 import {
+  openAICompatibleChatWithUsage,
   openAICompatibleCompleteWithUsage,
   type CompletionUsage,
 } from '../../llm/openai-compatible.js';
@@ -70,25 +71,27 @@ function providerFor(
   logger: Logger,
   usageSink: CompletionUsage,
 ): LLMProvider {
+  const params = {
+    baseUrl: config.baseUrl,
+    apiKey,
+    model: config.modelName,
+    label: config.displayName,
+    requireApiKey: true,
+    timeoutMs: config.timeoutSeconds * 1000,
+    redirect: 'error' as const,
+  };
+
+  /** Record the provider's reported usage so the caller can persist it. */
+  const track = ({ text, usage }: { text: string; usage: CompletionUsage }): string => {
+    usageSink.inputTokens = usage.inputTokens;
+    usageSink.outputTokens = usage.outputTokens;
+    return text;
+  };
+
   const inner: LLMProvider = {
     name: 'openai_compatible',
-    complete: async (opts) => {
-      const { text, usage } = await openAICompatibleCompleteWithUsage(
-        {
-          baseUrl: config.baseUrl,
-          apiKey,
-          model: config.modelName,
-          label: config.displayName,
-          requireApiKey: true,
-          timeoutMs: config.timeoutSeconds * 1000,
-          redirect: 'error',
-        },
-        opts,
-      );
-      usageSink.inputTokens = usage.inputTokens;
-      usageSink.outputTokens = usage.outputTokens;
-      return text;
-    },
+    complete: async (opts) => track(await openAICompatibleCompleteWithUsage(params, opts)),
+    chat: async (opts) => track(await openAICompatibleChatWithUsage(params, opts)),
   };
   return new LoggingProvider(inner, logger, config.modelName);
 }
