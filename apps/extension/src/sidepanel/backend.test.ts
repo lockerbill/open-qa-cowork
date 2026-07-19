@@ -10,6 +10,7 @@ import {
   listProjects,
   resolveUrl,
   sendChatMessage,
+  sendChatMessageSmart,
   type ChatMessage,
 } from './backend.js';
 
@@ -167,6 +168,75 @@ describe('generateBugReportSmart', () => {
     const body = bodyOf();
     expect(body).not.toHaveProperty('projectId');
     expect(body).not.toHaveProperty('environmentId');
+  });
+});
+
+describe('sendChatMessageSmart', () => {
+  const messages: ChatMessage[] = [{ role: 'user', content: 'hi' }];
+
+  it('hits the gateway with project/env context and unwraps the content', async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { taskRunId: 'run1', content: 'hello there' }));
+    const out = await sendChatMessageSmart(BACKEND, auth, messages);
+
+    expect(call().url).toBe(`${BACKEND}/api/workspaces/ws1/ai/tasks/chat`);
+    expect((call().init.headers as Record<string, string>).authorization).toBe('Bearer tok');
+    const body = bodyOf();
+    expect(body.messages).toEqual(messages);
+    expect(body.projectId).toBe('proj1');
+    expect(body.environmentId).toBe('env1');
+    expect(out).toEqual({ content: 'hello there' });
+  });
+
+  // Deliberate divergence from the four generate tasks: answering a chat turn
+  // from a different model than the user configured is worse than an error.
+  it('re-throws no_provider WITHOUT falling back to the legacy local LLM', async () => {
+    fetchMock.mockResolvedValueOnce(
+      res(409, { error: 'No AI provider is configured for this workspace.', code: 'no_provider' }),
+    );
+    await expect(sendChatMessageSmart(BACKEND, auth, messages)).rejects.toThrow(
+      /No AI provider is configured/,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the legacy endpoint on 401 (stale token)', async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(401, { error: 'unauth' }))
+      .mockResolvedValueOnce(res(200, { content: 'legacy reply' }));
+    const out = await sendChatMessageSmart(BACKEND, auth, messages);
+
+    expect(call(1).url).toBe(`${BACKEND}/api/chat`);
+    expect(call(1).init.headers as Record<string, string>).not.toHaveProperty('authorization');
+    expect(out.content).toBe('legacy reply');
+  });
+
+  it('re-throws a 403 (role denied) without falling back', async () => {
+    fetchMock.mockResolvedValueOnce(res(403, { error: 'forbidden', code: 'forbidden' }));
+    await expect(sendChatMessageSmart(BACKEND, auth, messages)).rejects.toThrow('forbidden');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the legacy endpoint directly when signed out', async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { content: 'x' }));
+    await sendChatMessageSmart(BACKEND, EMPTY_AUTH, messages);
+    expect(call().url).toBe(`${BACKEND}/api/chat`);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits project/env keys when the context is empty', async () => {
+    const noCtx: AuthState = { ...EMPTY_AUTH, token: 't', currentWorkspaceId: 'ws1' };
+    fetchMock.mockResolvedValueOnce(res(200, { taskRunId: 'r', content: 'c' }));
+    await sendChatMessageSmart(BACKEND, noCtx, messages);
+    const body = bodyOf();
+    expect(body).not.toHaveProperty('projectId');
+    expect(body).not.toHaveProperty('environmentId');
+  });
+
+  it('forwards the abort signal to the gateway call', async () => {
+    const controller = new AbortController();
+    fetchMock.mockResolvedValueOnce(res(200, { taskRunId: 'r', content: 'c' }));
+    await sendChatMessageSmart(BACKEND, auth, messages, controller.signal);
+    expect(call().init.signal).toBe(controller.signal);
   });
 });
 

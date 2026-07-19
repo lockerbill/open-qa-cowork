@@ -4,6 +4,7 @@ import type { Database } from '../../db/client.js';
 import { asyncHandler } from '../../http/async-handler.js';
 import {
   aiAnalyzePageSchema,
+  aiChatSchema,
   aiEnrichPlaywrightSchema,
   aiGenerateBugReportSchema,
   aiGenerateTestCasesSchema,
@@ -14,6 +15,7 @@ import { authMiddleware, requireMember } from '../auth/middleware.js';
 import { AI_TASK_ROLES } from '../rbac.js';
 import {
   runAnalyzePage,
+  runChat,
   runEnrichPlaywright,
   runGenerateBugReport,
   runGenerateTestCases,
@@ -74,6 +76,16 @@ export function aiTasksRouter(
     asyncHandler(async (req, res) => {
       const body = aiGenerateTestCasesSchema.parse(req.body);
       const { result } = await runGenerateTestCases(deps, contextOf(req, body), body);
+      res.json(result);
+    }),
+  );
+
+  router.post(
+    '/chat',
+    requireMember(db, ...AI_TASK_ROLES),
+    asyncHandler(async (req, res) => {
+      const body = aiChatSchema.parse(req.body);
+      const result = await runChat(deps, contextOf(req, body), body);
       res.json(result);
     }),
   );

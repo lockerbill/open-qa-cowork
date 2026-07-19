@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Settings } from '../shared/messages.js';
-import { sendChatMessage, type ChatMessage } from './backend.js';
+import { getAuth } from '../shared/storage.js';
+import { sendChatMessageSmart, type ChatMessage } from './backend.js';
 import { renderMarkdownInline } from './preview.js';
 
 /**
  * Free-form, multi-turn chat with the configured LLM. Ephemeral: history lives
  * in component state and is lost when the panel closes. Non-streaming: a
  * "thinking…" bubble shows while the full reply is awaited.
+ *
+ * When signed in, turns go through the workspace gateway and use the workspace's
+ * BYO provider; signed out they use the legacy env-configured endpoint.
  */
 export function ChatTab({ settings }: { settings: Settings | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -37,7 +41,15 @@ export function ChatTab({ settings }: { settings: Settings | null }) {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      const { content } = await sendChatMessage(settings.backendUrl, history, controller.signal);
+      // Read the token at call time rather than from panel props — AuthProjection
+      // deliberately omits it (see shared/messages.ts).
+      const auth = await getAuth();
+      const { content } = await sendChatMessageSmart(
+        settings.backendUrl,
+        auth,
+        history,
+        controller.signal,
+      );
       setMessages([...history, { role: 'assistant', content }]);
     } catch (e) {
       if ((e as Error).name === 'AbortError') {

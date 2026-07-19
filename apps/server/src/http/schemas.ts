@@ -187,4 +187,10 @@ export const aiEnrichPlaywrightSchema = z.object({
   enrich: z.boolean().optional(),
   ...aiTaskContextFields,
 });
+
+// Same message/token bounds as the legacy chat route, plus task context.
+export const aiChatSchema = z.object({
+  ...chatSchema.shape,
+  ...aiTaskContextFields,
+});
 export type ChatBody = z.infer<typeof chatSchema>;

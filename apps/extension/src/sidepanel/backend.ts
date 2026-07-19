@@ -385,3 +385,33 @@ export function sendChatMessage(
 ): Promise<{ content: string }> {
   return api<{ content: string }>(backendUrl, '/api/chat', { body: { messages }, signal });
 }
+
+/**
+ * Chat via the workspace gateway when signed in, else the legacy endpoint.
+ *
+ * Deliberately does NOT use canFallback(): unlike the generate tasks, a signed-in
+ * user with no configured provider gets the `no_provider` error surfaced rather
+ * than a silent fall back to the server's env-configured LLM. Answering a chat
+ * turn from a different model than the one the user configured is confusing in a
+ * way a one-shot generation is not. A 401 (stale token) still falls back.
+ */
+export async function sendChatMessageSmart(
+  backendUrl: string,
+  auth: AuthState,
+  messages: ChatMessage[],
+  signal?: AbortSignal,
+): Promise<{ content: string }> {
+  if (canUseGateway(auth)) {
+    try {
+      const r = await api<{ taskRunId: string; content: string }>(
+        backendUrl,
+        `/api/workspaces/${auth.currentWorkspaceId}/ai/tasks/chat`,
+        { token: auth.token, body: { messages, ...ctx(auth) }, signal },
+      );
+      return { content: r.content };
+    } catch (err) {
+      if (!(err instanceof ApiClientError && err.status === 401)) throw err;
+    }
+  }
+  return sendChatMessage(backendUrl, messages, signal);
+}

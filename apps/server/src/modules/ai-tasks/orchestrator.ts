@@ -7,7 +7,7 @@ import { writeAudit } from '../../audit/index.js';
 import { ApiError } from '../../http/errors.js';
 import { artifactId, parseJsonLoose, stripFences } from '../../http/util.js';
 import type { Logger } from '../../logging/logger.js';
-import { LLMError, type LLMProvider } from '../../llm/types.js';
+import { LLMError, type ChatMessage, type LLMProvider } from '../../llm/types.js';
 import { LoggingProvider } from '../../llm/logging-provider.js';
 import {
   openAICompatibleChatWithUsage,
@@ -19,6 +19,7 @@ import {
   analyzeUser,
   bugReportSystem,
   bugReportUser,
+  chatSystem,
   playwrightEnrichSystem,
   playwrightEnrichUser,
   testCasesSystem,
@@ -44,13 +45,22 @@ export interface AiTaskContext {
 }
 
 /**
+ * What a task's `build` produces: either a single-turn prompt (system + user)
+ * or a full message history for a multi-turn task. `runAiTask` dispatches to
+ * `provider.complete()` or `provider.chat()` accordingly.
+ */
+export type BuiltPrompt =
+  | { system: string; user: string; maxTokens?: number }
+  | { messages: ChatMessage[]; maxTokens?: number };
+
+/**
  * Describes one kind of AI task: how to build its prompt and shape its result.
  * The lifecycle around it (resolve provider, redact, record run/usage/audit) is
  * shared by `runAiTask`.
  */
 export interface AiTaskSpec<I, R> {
   taskType: string;
-  build: (input: I) => { system: string; user: string; maxTokens?: number };
+  build: (input: I) => BuiltPrompt;
   shape: (rawText: string) => R;
 }
 
@@ -148,11 +158,11 @@ export async function runAiTask<I, R>(
     // The prompt builders wrap session/pageModel via asUntrustedData(), which
     // re-redacts the content before it ever reaches the provider.
     const built = spec.build(input);
-    const raw = await provider.complete({
-      system: built.system,
-      user: built.user,
-      maxTokens: built.maxTokens ?? config.maxOutputTokens,
-    });
+    const maxTokens = built.maxTokens ?? config.maxOutputTokens;
+    const raw =
+      'messages' in built
+        ? await provider.chat({ messages: built.messages, maxTokens })
+        : await provider.complete({ system: built.system, user: built.user, maxTokens });
     const result = spec.shape(raw);
 
     await db
@@ -370,4 +380,43 @@ export async function runEnrichPlaywright(
     input,
   );
   return { taskRunId, content: result.content };
+}
+
+export interface ChatInput {
+  messages: ChatMessage[];
+  maxTokens?: number;
+}
+
+export interface ChatResult {
+  taskRunId: string;
+  content: string;
+  usage: { inputTokens: number | null; outputTokens: number | null };
+}
+
+/**
+ * Free-form multi-turn chat through the gateway — the only task that uses the
+ * `messages` arm of BuiltPrompt. The client sends user/assistant turns only;
+ * the server prepends its own system message.
+ */
+export async function runChat(
+  deps: AiTaskDeps,
+  ctx: AiTaskContext,
+  input: ChatInput,
+): Promise<ChatResult> {
+  const { taskRunId, result, usage } = await runAiTask(
+    deps,
+    ctx,
+    {
+      taskType: 'chat',
+      build: (i: ChatInput) => ({
+        messages: [{ role: 'system' as const, content: chatSystem() }, ...i.messages],
+        ...(i.maxTokens ? { maxTokens: i.maxTokens } : {}),
+      }),
+      // Unlike the generate tasks we keep fenced code blocks — they are
+      // legitimate chat output, not a JSON wrapper to strip.
+      shape: (raw) => ({ content: raw }),
+    },
+    input,
+  );
+  return { taskRunId, content: result.content, usage };
 }
