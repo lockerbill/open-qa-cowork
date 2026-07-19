@@ -14,7 +14,9 @@ import {
   type PanelState,
   type PanelToBackground,
 } from '../shared/messages.js';
+import { applyResolveMatch } from '../shared/context.js';
 import {
+  getAuth,
   getPageModel,
   getSession,
   getSettings,
@@ -22,7 +24,9 @@ import {
   savePageModel,
   saveSession,
   saveSettings,
+  updateAuth,
 } from '../shared/storage.js';
+import { resolveUrl } from '../sidepanel/backend.js';
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -106,6 +110,33 @@ const INTERNAL_URL = /^(chrome|chrome-extension|edge|about|devtools|view-source)
 let lastRefreshKey: string | null = null;
 
 /**
+ * Match the active tab's URL to a configured project/environment via the
+ * backend `resolve` endpoint and store the result on the auth context. Rides
+ * the `refreshActiveTab` dedupe (one call per distinct tab+url), so it adds no
+ * chatter on repeated focus events. No-ops when signed out or when the user has
+ * a manual override; network/auth errors leave the existing context untouched.
+ */
+async function maybeResolveContext(tabUrl: string): Promise<void> {
+  const auth = await getAuth();
+  if (!auth.token || !auth.currentWorkspaceId || auth.contextSource === 'manual') return;
+
+  const settings = await getSettings();
+  let match;
+  try {
+    ({ match } = await resolveUrl(settings.backendUrl, auth.token, auth.currentWorkspaceId, tabUrl));
+  } catch {
+    return; // network / 401 — keep current context rather than clearing it
+  }
+
+  await runExclusive(() =>
+    // Re-read inside the lock and re-apply the merge rules: a manual override
+    // set between our read above and here must win (applyResolveMatch guards it).
+    updateAuth((a) => Object.assign(a, applyResolveMatch(a, match ?? null))),
+  );
+  broadcast();
+}
+
+/**
  * React to the active tab changing (tab switch, window focus, or a load
  * completing in the active tab). Keeps the side panel showing the CURRENT tab
  * instead of a stale global page model: re-scans allowlisted tabs, and clears
@@ -119,6 +150,11 @@ async function refreshActiveTab(): Promise<void> {
   const key = `${tab.id}|${tab.url}`;
   if (key === lastRefreshKey) return;
   lastRefreshKey = key;
+
+  // Project/environment auto-detection is independent of the local allowlist
+  // (it matches the workspace's configured baseUrls), so run it for any
+  // readable page before the allowlist branch.
+  void maybeResolveContext(tab.url);
 
   const origin = originOf(tab.url);
   if (await isAllowed(origin)) {
@@ -140,7 +176,7 @@ async function refreshActiveTab(): Promise<void> {
 }
 
 async function buildState(): Promise<PanelState> {
-  const [session, pageModel] = await Promise.all([getSession(), getPageModel()]);
+  const [session, pageModel, auth] = await Promise.all([getSession(), getPageModel(), getAuth()]);
   const tab = await activeTab();
   const origin = originOf(tab?.url);
   return {
@@ -149,6 +185,16 @@ async function buildState(): Promise<PanelState> {
     recording: session.status === 'recording',
     activeOrigin: origin,
     allowed: await isAllowed(origin),
+    auth: {
+      signedIn: !!auth.token,
+      role: auth.currentWorkspaceRole,
+      workspaceId: auth.currentWorkspaceId,
+      projectId: auth.currentProjectId,
+      projectName: auth.currentProjectName,
+      environmentId: auth.currentEnvironmentId,
+      environmentName: auth.currentEnvironmentName,
+      contextSource: auth.contextSource,
+    },
   };
 }
 
@@ -307,6 +353,38 @@ async function handlePanelMessage(
       sendResponse({ ok: await addAllowlistOrigin(msg.origin) });
       broadcast();
       return;
+    case 'RESOLVE_ACTIVE_TAB': {
+      const tab = await activeTab();
+      if (tab?.url && !INTERNAL_URL.test(tab.url)) await maybeResolveContext(tab.url);
+      sendResponse({ ok: true });
+      return;
+    }
+    case 'SET_CONTEXT':
+      await runExclusive(() =>
+        updateAuth((a) => {
+          a.currentProjectId = msg.projectId;
+          a.currentProjectName = msg.projectName;
+          a.currentEnvironmentId = msg.environmentId;
+          a.currentEnvironmentName = msg.environmentName;
+          a.contextSource = 'manual';
+        }),
+      );
+      sendResponse({ ok: true });
+      broadcast();
+      return;
+    case 'CLEAR_CONTEXT_OVERRIDE': {
+      await runExclusive(() =>
+        updateAuth((a) => {
+          a.contextSource = null;
+        }),
+      );
+      // Repopulate from auto-detection now that the override is gone.
+      const tab = await activeTab();
+      if (tab?.url && !INTERNAL_URL.test(tab.url)) await maybeResolveContext(tab.url);
+      sendResponse({ ok: true });
+      broadcast();
+      return;
+    }
   }
 }
 

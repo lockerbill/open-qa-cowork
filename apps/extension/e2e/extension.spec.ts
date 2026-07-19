@@ -128,3 +128,46 @@ test('records a flow without leaking secrets and tracks SPA navigation (spec §9
   expect(JSON.stringify(session)).not.toContain('hunter2');
   await page.close();
 });
+
+test('a manual project/environment override survives tab navigation (auto-detect never clobbers it)', async () => {
+  // Seed a signed-in session with a MANUAL context. The backend at :8787 is not
+  // running, so any resolve attempt fails and is swallowed; the manual guard
+  // must also prevent auto-detection from touching the override.
+  await worker.evaluate(() =>
+    chrome.storage.local.set({
+      auth: {
+        token: 'e2e-token',
+        userEmail: 'qa@example.com',
+        currentWorkspaceId: 'ws_e2e',
+        currentWorkspaceName: 'E2E WS',
+        currentWorkspaceRole: 'admin',
+        currentProjectId: 'proj_manual',
+        currentProjectName: 'Manual Project',
+        currentEnvironmentId: 'env_manual',
+        currentEnvironmentName: 'Manual Env',
+        contextSource: 'manual',
+      },
+    }),
+  );
+
+  // Navigate to trigger refreshActiveTab -> maybeResolveContext.
+  const page = await context.newPage();
+  await page.goto(FIXTURE);
+  await page.waitForTimeout(500);
+  await page.goto(`${FIXTURE}?nav=2`); // second navigation / tab update
+
+  await expect
+    .poll(
+      async () => {
+        const r = await worker.evaluate(() => chrome.storage.local.get('auth'));
+        return r.auth?.currentProjectId;
+      },
+      { timeout: 4000 },
+    )
+    .toBe('proj_manual');
+
+  const { auth } = await worker.evaluate(() => chrome.storage.local.get('auth'));
+  expect(auth.contextSource).toBe('manual');
+  expect(auth.currentEnvironmentId).toBe('env_manual');
+  await page.close();
+});

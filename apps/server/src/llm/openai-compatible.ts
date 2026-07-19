@@ -18,6 +18,12 @@ export interface OpenAICompatParams {
   extraBody?: Record<string, unknown>;
   /** Abort the request after this many ms. Omitted/0 means wait indefinitely. */
   timeoutMs?: number;
+  /**
+   * Redirect handling passed to fetch. The BYO provider path sets `'error'` so a
+   * malicious endpoint cannot redirect into an internal address (SSRF bypass).
+   * Defaults to fetch's behaviour (follow) for the trusted env-configured paths.
+   */
+  redirect?: RequestRedirect;
 }
 
 interface ChatCompletionResponse {
@@ -25,7 +31,17 @@ interface ChatCompletionResponse {
     finish_reason?: string;
     message?: { content?: string | null; reasoning_content?: string | null };
   }[];
-  usage?: { completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
+export interface CompletionUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+export interface CompletionWithUsage {
+  text: string;
+  usage: CompletionUsage;
 }
 
 /** Remove inline <think>...</think> reasoning blocks some servers leave in `content`. */
@@ -34,12 +50,16 @@ function stripThinkTags(text: string): string {
 }
 
 /**
+ * Like {@link openAICompatibleComplete} but also returns the provider's token
+ * usage (`prompt_tokens` / `completion_tokens`, null when the server omits
+ * them). Used by the audited workspace gateway to record usage.
  * Single-turn completion over any OpenAI-compatible endpoint. Thin wrapper that
  * frames the system + user prompt as a two-message chat.
  */
-export async function openAICompatibleComplete(
+export async function openAICompatibleCompleteWithUsage(
   params: OpenAICompatParams,
   opts: CompleteOptions,
+): Promise<CompletionWithUsage> {
 ): Promise<string> {
   return openAICompatibleChat(params, {
     messages: [
@@ -84,6 +104,7 @@ export async function openAICompatibleChat(
         ...params.extraBody,
       }),
       signal: controller?.signal,
+      redirect: params.redirect,
     });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -100,8 +121,12 @@ export async function openAICompatibleChat(
   }
   const data = (await res.json()) as ChatCompletionResponse;
   const choice = data.choices?.[0];
+  const usage: CompletionUsage = {
+    inputTokens: data.usage?.prompt_tokens ?? null,
+    outputTokens: data.usage?.completion_tokens ?? null,
+  };
   const text = stripThinkTags(choice?.message?.content ?? '');
-  if (text) return text;
+  if (text) return { text, usage };
 
   // Empty content. For reasoning models (e.g. Qwen3) this usually means the
   // token budget was spent thinking before any answer was emitted. Surface the
@@ -114,4 +139,19 @@ export async function openAICompatibleChat(
       : '';
   const tokens = completionTokens != null ? `, completion_tokens=${completionTokens}` : '';
   throw new LLMError(`${params.label} returned no content (finish_reason=${finishReason}${tokens})${hint}`);
+}
+
+/**
+ * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
+ * LM Studio, llama.cpp, vLLM, ...). Shared by the cloud OpenAI provider and the
+ * local provider so the request/parse logic lives in one place. Returns only the
+ * completion text; use {@link openAICompatibleCompleteWithUsage} when token
+ * usage is needed.
+ */
+export async function openAICompatibleComplete(
+  params: OpenAICompatParams,
+  opts: CompleteOptions,
+): Promise<string> {
+  const { text } = await openAICompatibleCompleteWithUsage(params, opts);
+  return text;
 }

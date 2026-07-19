@@ -19,3 +19,13 @@ export const openExtensionSettings = () =>
   sendToBackground({ type: 'OPEN_EXTENSION_SETTINGS' });
 export const addAllowlistOrigin = (origin: string) =>
   sendToBackground<{ ok: boolean }>({ type: 'ADD_ALLOWLIST_ORIGIN', origin });
+export const resolveActiveTab = () =>
+  sendToBackground<{ ok: boolean }>({ type: 'RESOLVE_ACTIVE_TAB' });
+export const setContext = (c: {
+  projectId: string | null;
+  projectName: string | null;
+  environmentId: string | null;
+  environmentName: string | null;
+}) => sendToBackground<{ ok: boolean }>({ type: 'SET_CONTEXT', ...c });
+export const clearContextOverride = () =>
+  sendToBackground<{ ok: boolean }>({ type: 'CLEAR_CONTEXT_OVERRIDE' });

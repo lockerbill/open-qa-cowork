@@ -1,9 +1,10 @@
 import type { PageModel, TestSession } from '@qa-copilot/shared';
-import { DEFAULT_SETTINGS, type Settings } from './messages.js';
+import { DEFAULT_SETTINGS, EMPTY_AUTH, type AuthState, type Settings } from './messages.js';
 
 const SETTINGS_KEY = 'settings';
 const SESSION_KEY = 'session';
 const PAGE_MODEL_KEY = 'pageModel';
+const AUTH_KEY = 'auth';
 
 export async function getSettings(): Promise<Settings> {
   const stored = await chrome.storage.local.get(SETTINGS_KEY);
@@ -34,6 +35,27 @@ export async function getSession(): Promise<TestSession> {
 
 export async function saveSession(session: TestSession): Promise<void> {
   await chrome.storage.local.set({ [SESSION_KEY]: session });
+}
+
+export async function getAuth(): Promise<AuthState> {
+  const stored = await chrome.storage.local.get(AUTH_KEY);
+  return { ...EMPTY_AUTH, ...(stored[AUTH_KEY] as Partial<AuthState> | undefined) };
+}
+
+export async function saveAuth(auth: AuthState): Promise<void> {
+  await chrome.storage.local.set({ [AUTH_KEY]: auth });
+}
+
+export async function clearAuth(): Promise<void> {
+  await chrome.storage.local.set({ [AUTH_KEY]: EMPTY_AUTH });
+}
+
+/** Read-modify-write the stored auth. Callers serialize via the background mutex. */
+export async function updateAuth(mutate: (auth: AuthState) => void): Promise<AuthState> {
+  const auth = await getAuth();
+  mutate(auth);
+  await saveAuth(auth);
+  return auth;
 }
 
 export async function getPageModel(): Promise<PageModel | null> {

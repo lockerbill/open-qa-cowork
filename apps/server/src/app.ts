@@ -11,6 +11,13 @@ import {
 } from './http/schemas.js';
 import { artifactId, parseJsonLoose, stripFences } from './http/util.js';
 import { requestIdMiddleware } from './http/request-id.js';
+import { ApiError } from './http/errors.js';
+import { authRouter } from './modules/auth/routes.js';
+import { workspacesRouter } from './modules/workspaces/routes.js';
+import { providersRouter } from './modules/providers/routes.js';
+import { projectsRouter, resolveRouter } from './modules/projects/routes.js';
+import { aiTasksRouter } from './modules/ai-tasks/routes.js';
+import type { Database } from './db/client.js';
 import { defaultLogger, type Logger } from './logging/logger.js';
 import {
   analyzeSystem,
@@ -25,8 +32,22 @@ import {
 } from './prompts/index.js';
 import { ZodError } from 'zod';
 
+/** Optional multi-user platform dependencies. When provided, the auth/workspace
+ * (and later provider/AI-task) routers are mounted. Omitted in legacy-only tests. */
+export interface PlatformDeps {
+  db: Database;
+  jwtSecret: string;
+  masterEncryptionKey: string;
+  /** Allow BYO provider base URLs that resolve to private/reserved hosts (local LLMs). */
+  allowPrivateLlmHosts: boolean;
+}
+
 /** Build the Express app with an injected LLM provider (tests pass a mock). */
-export function createApp(provider: LLMProvider, logger: Logger = defaultLogger()): express.Express {
+export function createApp(
+  provider: LLMProvider,
+  logger: Logger = defaultLogger(),
+  platform?: PlatformDeps,
+): express.Express {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '4mb' }));
@@ -35,6 +56,28 @@ export function createApp(provider: LLMProvider, logger: Logger = defaultLogger(
   app.get('/health', (_req, res) => {
     res.json({ ok: true, provider: provider.name });
   });
+
+  if (platform) {
+    const { db, jwtSecret, masterEncryptionKey, allowPrivateLlmHosts } = platform;
+    app.use('/api/auth', authRouter(db, jwtSecret));
+    // Mount the more specific workspace sub-paths before the workspaces router.
+    app.use(
+      '/api/workspaces/:workspaceId/llm-providers',
+      providersRouter(db, jwtSecret, masterEncryptionKey, allowPrivateLlmHosts),
+    );
+    app.use(
+      '/api/workspaces/:workspaceId/ai/tasks',
+      aiTasksRouter(db, jwtSecret, masterEncryptionKey, logger, allowPrivateLlmHosts),
+    );
+    app.use('/api/workspaces/:workspaceId/projects', projectsRouter(db, jwtSecret));
+    app.use('/api/workspaces/:workspaceId/resolve', resolveRouter(db, jwtSecret));
+    app.use('/api/workspaces', workspacesRouter(db, jwtSecret));
+  }
+
+  // --- Legacy unauthed AI endpoints (env-driven provider; no auth/usage/audit).
+  // Kept as an extension fallback. The authed, workspace-scoped equivalents live
+  // under /api/workspaces/:workspaceId/ai/tasks (analyze-page, generate-test-cases,
+  // generate-bug-report, enrich-playwright). ---
 
   // --- POST /api/page/analyze ---
   app.post(
@@ -168,6 +211,10 @@ export function createApp(provider: LLMProvider, logger: Logger = defaultLogger(
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof ZodError) {
       res.status(400).json({ error: 'Invalid request', details: err.flatten() });
+      return;
+    }
+    if (err instanceof ApiError) {
+      res.status(err.status).json({ error: err.message, code: err.code, ...err.details });
       return;
     }
     if (err instanceof LLMError) {

@@ -64,11 +64,22 @@ QA Copilot is an AI pair-tester for manual QA, delivered as a Chrome extension
 layered model, records exploratory testing flows, and generates manual test
 cases, Jira-ready bug reports, and Playwright `.spec.ts` drafts.
 
-This repo implements **MVP 1** only (spec milestones M1–M6). The authoritative
-product spec is `specs/qa-copilot-product-idea-to-mvp-spec.md`; design decisions
-live in `.claude/plans/`. There is intentionally **no database, queue, or object
-storage** — state lives in `chrome.storage.local` and file exports. The backend
-is a stateless proxy: it redacts, calls an LLM, and returns artifacts.
+This repo implements **MVP 1** plus the **multi-user + BYO LLM vertical slice**
+(`specs/qa-copilot-multi-user-byo-llm-spec.md`). The authoritative MVP-1 product
+spec is `specs/qa-copilot-product-idea-to-mvp-spec.md`; design decisions live in
+`.claude/plans/`.
+
+The legacy AI generation path (`/api/generate/*`, `/api/page/analyze`) is still a
+**stateless proxy**: it redacts, calls the env-configured LLM, and returns
+artifacts — no persistence. Layered on top is an **optional multi-user platform**
+(Postgres + Drizzle) that adds users/workspaces/RBAC, an encrypted secret vault,
+workspace-scoped BYO LLM provider configs, and a workspace-scoped
+`POST …/ai/tasks/generate-bug-report` that routes through the configured provider
+with redaction, usage, and audit logging. The platform mounts only when
+`DATABASE_URL`, `JWT_SECRET`, and `MASTER_ENCRYPTION_KEY` are set; otherwise the
+server runs legacy-only. The extension prefers the gateway task endpoint when
+signed in with a configured provider, and falls back to the legacy endpoint
+otherwise.
 
 **Hard rule — reasoning artifacts require a real LLM.** Page analysis, test
 cases, and bug reports always call the provider; there is no deterministic mock
@@ -95,15 +106,23 @@ apps/extension/         MV3 Chrome extension (Vite + @crxjs + React 18)
   src/shared/             Cross-context glue: messages.ts (typed message bus), storage.ts
   e2e/                    Playwright E2E against a static SPA fixture
 
-apps/server/            Thin Express proxy
-  src/app.ts              createApp(provider) — DI; the 4 generation routes
+apps/server/            Express proxy + optional multi-user platform
+  src/app.ts              createApp(provider, logger, platform?) — DI; legacy routes
+                          always; auth/workspaces/providers/ai-tasks routers when platform set
   src/llm/                Provider-agnostic gateway: createProvider() factory in index.ts,
                           providers anthropic.ts / openai.ts / openrouter.ts / local.ts
                           (the latter three share openai-compatible.ts), LoggingProvider decorator
+  src/db/                 Drizzle: schema.ts (all tables), client.ts (node-postgres),
+                          testing.ts (pglite), migrate.ts, id.ts (prefixed ids)
+  src/modules/            Platform features: auth/ (argon-less bcrypt + JWT + middleware),
+                          workspaces/, secrets/ (AES-256-GCM vault), providers/ (BYO config +
+                          validate), ai-tasks/ (resolver + orchestrator), rbac.ts (roles)
+  src/audit/              writeAudit() — append-only audit events to the DB
   src/redaction/guard.ts  Defense-in-depth re-redaction + untrusted-data wrapping
   src/prompts/            Layered-context prompt builders
-  src/http/               zod schemas + JSON parsing helpers + request-id middleware
+  src/http/               zod schemas + JSON helpers + request-id + ApiError + asyncHandler
   src/logging/            pino logger + AsyncLocalStorage request-context
+  drizzle/                Generated SQL migrations (applied to Postgres and pglite)
 ```
 
 ## Run Targets
@@ -123,6 +142,16 @@ Node ≥ 20.
 | Run the server (watch) | `pnpm --filter @qa-copilot/server dev` (needs `apps/server/.env`) |
 | Build the extension | `pnpm --filter @qa-copilot/extension build` → load `apps/extension/dist` unpacked |
 | Extension E2E | `pnpm --filter @qa-copilot/extension test:e2e` (run `build` first; `playwright install chromium` once) |
+| Start local Postgres | `docker compose up -d` (root `docker-compose.yml`) |
+| Generate a migration | `pnpm --filter @qa-copilot/server db:generate` (after editing `src/db/schema.ts`) |
+| Apply migrations | `pnpm --filter @qa-copilot/server db:migrate` (needs `DATABASE_URL`) |
+
+The multi-user platform needs `DATABASE_URL`, `JWT_SECRET`, and a base64 32-byte
+`MASTER_ENCRYPTION_KEY` in `apps/server/.env` (generate the key with
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`).
+Run `docker compose up -d` then `db:migrate` before first use. Server integration
+tests use **pglite** (`src/db/testing.ts`) — no Docker/Postgres needed for `test`.
+Platform secrets (LLM API keys) live encrypted in the DB vault, never in `.env`.
 
 Server config: copy `apps/server/.env.example` → `apps/server/.env`, set
 `LLM_PROVIDER` (`anthropic`|`openai`|`local`|`openrouter`) and the matching settings. For
