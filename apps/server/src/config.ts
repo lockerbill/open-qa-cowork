@@ -3,6 +3,7 @@ import { parseLogLevel, type LogLevel } from './logging/logger.js';
 /** Server configuration sourced from environment variables. */
 export interface Config {
   port: number;
+  host: string;
   logLevel: LogLevel;
   /** Postgres connection string for the multi-user platform tables. */
   databaseUrl: string;
@@ -30,6 +31,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const provider = (env.LLM_PROVIDER ?? 'anthropic').toLowerCase();
   return {
     port: Number(env.PORT ?? 8787),
+    host: env.HOST ?? '0.0.0.0',
     logLevel: parseLogLevel(env.LOG_LEVEL),
     databaseUrl: env.DATABASE_URL ?? '',
     jwtSecret: env.JWT_SECRET ?? '',

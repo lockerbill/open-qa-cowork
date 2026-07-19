@@ -38,6 +38,22 @@ async function api<T>(
     method: opts.method ?? (opts.body !== undefined ? 'POST' : 'GET'),
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+async function post<T>(
+  backendUrl: string,
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const res = await fetch(`${backendUrl.replace(/\/$/, '')}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -365,4 +381,12 @@ export async function generatePlaywrightSmart(
     }
   }
   return generatePlaywright(backendUrl, payload);
+}
+
+export function sendChatMessage(
+  backendUrl: string,
+  messages: ChatMessage[],
+  signal?: AbortSignal,
+): Promise<{ content: string }> {
+  return post<{ content: string }>(backendUrl, '/api/chat', { messages }, signal);
 }

@@ -1,5 +1,5 @@
-import { openAICompatibleComplete } from './openai-compatible.js';
-import { LLMError, type CompleteOptions, type LLMProvider } from './types.js';
+import { openAICompatibleChat, openAICompatibleComplete } from './openai-compatible.js';
+import { LLMError, type ChatOptions, type CompleteOptions, type LLMProvider } from './types.js';
 
 /**
  * OpenRouter (https://openrouter.ai) — an OpenAI-compatible gateway that fronts
@@ -13,17 +13,22 @@ export class OpenRouterProvider implements LLMProvider {
     private readonly model: string,
   ) {}
 
-  async complete(opts: CompleteOptions): Promise<string> {
+  private params() {
     if (!this.model) throw new LLMError('OPENROUTER_MODEL is not configured', 503);
-    return openAICompatibleComplete(
-      {
-        baseUrl: 'https://openrouter.ai/api/v1',
-        apiKey: this.apiKey,
-        model: this.model,
-        label: 'OpenRouter',
-        requireApiKey: true,
-      },
-      opts,
-    );
+    return {
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: this.apiKey,
+      model: this.model,
+      label: 'OpenRouter',
+      requireApiKey: true,
+    };
+  }
+
+  async complete(opts: CompleteOptions): Promise<string> {
+    return openAICompatibleComplete(this.params(), opts);
+  }
+
+  async chat(opts: ChatOptions): Promise<string> {
+    return openAICompatibleChat(this.params(), opts);
   }
 }

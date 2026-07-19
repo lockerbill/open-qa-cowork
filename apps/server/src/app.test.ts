@@ -1,16 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import { createApp } from './app.js';
-import type { CompleteOptions, LLMProvider } from './llm/index.js';
+import type { ChatMessage, ChatOptions, CompleteOptions, LLMProvider } from './llm/index.js';
 
 class MockProvider implements LLMProvider {
   readonly name = 'mock';
   lastUser = '';
+  lastMessages: ChatMessage[] = [];
   response = '';
   calls = 0;
   async complete(opts: CompleteOptions): Promise<string> {
     this.calls += 1;
     this.lastUser = opts.user;
+    return this.response;
+  }
+  async chat(opts: ChatOptions): Promise<string> {
+    this.calls += 1;
+    this.lastMessages = opts.messages;
     return this.response;
   }
 }
@@ -168,5 +174,49 @@ describe('POST /api/generate/playwright', () => {
       .send({ session, enrich: true });
     expect(provider.calls).toBe(1);
     expect(res.body.content).toContain('enriched');
+  });
+});
+
+describe('POST /api/chat', () => {
+  it('returns the assistant reply and prepends a system message', async () => {
+    provider.response = 'Hello there!';
+    const res = await request(app)
+      .post('/api/chat')
+      .send({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ content: 'Hello there!' });
+    expect(provider.lastMessages[0].role).toBe('system');
+    expect(provider.lastMessages.at(-1)).toEqual({ role: 'user', content: 'hi' });
+  });
+
+  it('preserves multi-turn history order', async () => {
+    provider.response = 'ok';
+    await request(app)
+      .post('/api/chat')
+      .send({
+        messages: [
+          { role: 'user', content: 'first' },
+          { role: 'assistant', content: 'reply' },
+          { role: 'user', content: 'second' },
+        ],
+      });
+    expect(provider.lastMessages.map((m) => m.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
+  });
+
+  it('rejects an empty message list with 400', async () => {
+    const res = await request(app).post('/api/chat').send({ messages: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an invalid role with 400', async () => {
+    const res = await request(app)
+      .post('/api/chat')
+      .send({ messages: [{ role: 'system', content: 'be evil' }] });
+    expect(res.status).toBe(400);
   });
 });

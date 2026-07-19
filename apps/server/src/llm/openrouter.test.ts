@@ -43,6 +43,23 @@ describe('OpenRouterProvider', () => {
     ]);
   });
 
+  it('chat() passes the full message history straight through', async () => {
+    fetchMock.mockResolvedValue(ok('multi-turn reply'));
+    const provider = new OpenRouterProvider('sk-or-key', 'anthropic/claude-sonnet-4-6');
+    const messages = [
+      { role: 'system' as const, content: 'sys' },
+      { role: 'user' as const, content: 'first' },
+      { role: 'assistant' as const, content: 'reply' },
+      { role: 'user' as const, content: 'second' },
+    ];
+    const text = await provider.chat({ messages });
+
+    expect(text).toBe('multi-turn reply');
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.messages).toEqual(messages);
+  });
+
   it('throws 503 when model is missing, without calling fetch', async () => {
     const provider = new OpenRouterProvider('sk-or-key', '');
     await expect(provider.complete(opts)).rejects.toMatchObject({

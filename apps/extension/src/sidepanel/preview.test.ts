@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPreviewHtml } from './preview.js';
+import { buildPreviewHtml, renderMarkdownInline } from './preview.js';
 
 describe('buildPreviewHtml', () => {
   it('renders markdown headings, lists, and tables as HTML', () => {
@@ -34,5 +34,20 @@ describe('buildPreviewHtml', () => {
     expect(html.startsWith('<!doctype html>')).toBe(true);
     expect(html.trimEnd().endsWith('</html>')).toBe(true);
     expect(html).toContain('class="markdown-body"');
+  });
+});
+
+describe('renderMarkdownInline', () => {
+  it('renders a markdown fragment (not a full document)', () => {
+    const html = renderMarkdownInline('**bold** and `code`');
+    expect(html).toContain('<strong>bold</strong>');
+    expect(html).toContain('<code>code</code>');
+    expect(html).not.toContain('<!doctype html>');
+  });
+
+  it('sanitizes dangerous HTML out of the fragment', () => {
+    const html = renderMarkdownInline('<script>alert(1)</script>\n\nok');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('alert(1)');
   });
 });

@@ -1,5 +1,5 @@
 import type { Logger } from '../logging/logger.js';
-import { LLMError, type CompleteOptions, type LLMProvider } from './types.js';
+import { LLMError, type ChatOptions, type CompleteOptions, type LLMProvider } from './types.js';
 
 /**
  * Wraps an LLMProvider to trace each call. Logs request/response metadata at
@@ -38,9 +38,39 @@ export class LoggingProvider implements LLMProvider {
       'llm request body',
     );
 
+    return this.trace(base, () => this.inner.complete(opts));
+  }
+
+  async chat(opts: ChatOptions): Promise<string> {
+    const base = { provider: this.inner.name, model: this.model };
+    const totalChars = opts.messages.reduce((n, m) => n + m.content.length, 0);
+
+    this.logger.info(
+      {
+        event: 'llm.request',
+        ...base,
+        maxTokens: opts.maxTokens ?? null,
+        messageCount: opts.messages.length,
+        totalChars,
+      },
+      'llm chat request',
+    );
+    this.logger.debug(
+      { event: 'llm.request.body', ...base, messages: opts.messages },
+      'llm chat request body',
+    );
+
+    return this.trace(base, () => this.inner.chat(opts));
+  }
+
+  /** Time an inner LLM call and log its response/error metadata. */
+  private async trace(
+    base: { provider: string; model: string },
+    call: () => Promise<string>,
+  ): Promise<string> {
     const start = performance.now();
     try {
-      const response = await this.inner.complete(opts);
+      const response = await call();
       this.logger.info(
         {
           event: 'llm.response',

@@ -7,6 +7,14 @@ describe('loadConfig', () => {
     expect(loadConfig({}).provider).toBe('anthropic');
   });
 
+  it('defaults the host to all interfaces', () => {
+    expect(loadConfig({}).host).toBe('0.0.0.0');
+  });
+
+  it('reads HOST when set', () => {
+    expect(loadConfig({ HOST: '127.0.0.1' }).host).toBe('127.0.0.1');
+  });
+
   it('recognizes the local provider and populates its config', () => {
     const config = loadConfig({
       LLM_PROVIDER: 'local',

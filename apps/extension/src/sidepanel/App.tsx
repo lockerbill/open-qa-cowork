@@ -19,6 +19,7 @@ import {
 } from './backend.js';
 import { downloadJson, downloadMarkdown, downloadTypeScript } from './exports.js';
 import { previewMarkdown } from './preview.js';
+import { ChatTab } from './ChatTab.js';
 
 /** Map an AI-task error to a role-aware, user-facing message. */
 function explainError(e: unknown, role: string | null): string {
@@ -40,7 +41,7 @@ function showConfigure(e: unknown, role: string | null): boolean {
   );
 }
 
-type Tab = 'page' | 'session' | 'generate';
+type Tab = 'page' | 'session' | 'generate' | 'chat';
 
 export function App() {
   const [state, setState] = useState<PanelState | null>(null);
@@ -96,12 +97,16 @@ export function App() {
         <button className={tab === 'generate' ? 'active' : ''} onClick={() => setTab('generate')}>
           Generate
         </button>
+        <button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>
+          Chat
+        </button>
       </nav>
 
       <div className="content">
         {tab === 'page' && <PageTab state={state} settings={settings} />}
         {tab === 'session' && <SessionTab state={state} onChange={refresh} />}
         {tab === 'generate' && <GenerateTab state={state} settings={settings} />}
+        {tab === 'chat' && <ChatTab settings={settings} />}
       </div>
     </div>
   );
@@ -243,6 +248,18 @@ function ContextBar({ auth, settings }: { auth: AuthProjection; settings: Settin
       {err && <span className="err">{err}</span>}
     </div>
   );
+function formatAnalyzePreview(answer: AnalyzeResponse): string {
+  const lines = ['# AI suggestions', '', answer.summary];
+
+  if (answer.risks.length > 0) {
+    lines.push('', '## Risks', ...answer.risks.map((risk) => `- ${risk}`));
+  }
+
+  if (answer.suggestedTests.length > 0) {
+    lines.push('', '## Suggested tests', ...answer.suggestedTests.map((test) => `- ${test}`));
+  }
+
+  return lines.join('\n');
 }
 
 function PageTab({ state, settings }: { state: PanelState; settings: Settings | null }) {
@@ -282,6 +299,15 @@ function PageTab({ state, settings }: { state: PanelState; settings: Settings | 
         </button>
         <button className="ghost" disabled={!state.pageModel || busy} onClick={ask}>
           {busy ? 'Asking…' : 'What should I test?'}
+        </button>
+        <button
+          className="ghost"
+          disabled={!answer}
+          onClick={() => {
+            if (answer) previewMarkdown('AI suggestions', formatAnalyzePreview(answer));
+          }}
+        >
+          Preview
         </button>
       </div>
 

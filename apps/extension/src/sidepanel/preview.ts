@@ -69,6 +69,16 @@ const PREVIEW_STYLES = `
   .markdown-body a { color: #0969da; }
 `;
 
+/**
+ * Render markdown to a sanitized HTML fragment for inline display (e.g. chat
+ * bubbles). Unlike buildPreviewHtml this returns just the body HTML, not a full
+ * document. Sanitized with DOMPurify so it is safe for dangerouslySetInnerHTML.
+ */
+export function renderMarkdownInline(md: string): string {
+  const rendered = marked.parse(md, { async: false }) as string;
+  return DOMPurify.sanitize(rendered);
+}
+
 /** Convert markdown to a complete, sanitized, styled HTML document. Pure. */
 export function buildPreviewHtml(title: string, md: string): string {
   const rendered = marked.parse(md, { async: false }) as string;
