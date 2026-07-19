@@ -37,6 +37,16 @@ export function redactValue(): string {
   return REDACTED;
 }
 
+// `Authorization: Basic <b64>` / `Bearer <token>`, however it was serialized.
+// Basic credentials are base64, whose `+ / =` fall outside LONG_TOKEN's class,
+// so they need their own rule rather than relying on the generic token match.
+const AUTH_HEADER = /(\bauthorization"?\s*[:=]\s*"?)(basic|bearer)\s+[A-Za-z0-9+/=._~-]+/gi;
+
+// Credential-bearing config keys (e.g. a serialized JiraConfig). Deliberately
+// narrow: `token` alone is not listed because auth JWTs are caught by JWT above
+// and a bare "token" key is too common to mask without collateral damage.
+const SECRET_KEY = /("?\b(?:apiToken|api_token|apiKey|api_key|clientSecret|client_secret|password)"?\s*[:=]\s*"?)[^"',}\s]+/gi;
+
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 // 13–19 digit runs (optionally separated by spaces/dashes) — card-like.
 // Anchored on digits at both ends so a trailing separator is never consumed.
@@ -45,10 +55,12 @@ const CARD = /\b\d(?:[ -]?\d){12,18}\b/g;
 const JWT = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const LONG_TOKEN = /\b[A-Za-z0-9_-]{32,}\b/g;
 
-/** Mask emails, card numbers, and tokens inside free text. */
+/** Mask credentials, emails, card numbers, and tokens inside free text. */
 export function redactText(text: string): string {
   if (!text) return text;
   return text
+    .replace(AUTH_HEADER, `$1$2 ${REDACTED}`)
+    .replace(SECRET_KEY, `$1${REDACTED}`)
     .replace(JWT, '[TOKEN]')
     .replace(EMAIL, '[EMAIL]')
     .replace(CARD, '[CARD]')

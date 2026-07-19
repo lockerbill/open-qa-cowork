@@ -5,6 +5,7 @@ import type {
   PageModel,
   TestSession,
 } from '@qa-copilot/shared';
+import type { JiraMessage } from '../integrations/jira/messages.js';
 
 /** User settings persisted in chrome.storage.local. */
 export interface Settings {
@@ -101,7 +102,9 @@ export type PanelToBackground =
       environmentId: string | null;
       environmentName: string | null;
     }
-  | { type: 'CLEAR_CONTEXT_OVERRIDE' };
+  | { type: 'CLEAR_CONTEXT_OVERRIDE' }
+  // Jira export owns its own message shapes; see integrations/jira/messages.ts.
+  | JiraMessage;
 
 // --- Messages from the content script to the background --------------------
 

@@ -27,6 +27,11 @@ import {
   updateAuth,
 } from '../shared/storage.js';
 import { resolveUrl } from '../sidepanel/backend.js';
+import {
+  JIRA_MESSAGE_TYPES,
+  handleJiraMessage,
+  type JiraMessage,
+} from '../integrations/jira/messages.js';
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -304,6 +309,13 @@ async function handlePanelMessage(
   msg: PanelToBackground,
   sendResponse: (response?: unknown) => void,
 ): Promise<void> {
+  // Jira messages are handled by their own module, which owns the credentials
+  // and returns a uniform { ok, ... } result rather than throwing at the router.
+  if ((JIRA_MESSAGE_TYPES as readonly string[]).includes(msg.type)) {
+    sendResponse(await handleJiraMessage(msg as JiraMessage));
+    return;
+  }
+
   switch (msg.type) {
     case 'GET_STATE':
       sendResponse(await buildState());

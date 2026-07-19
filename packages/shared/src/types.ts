@@ -230,3 +230,41 @@ export interface BugReport {
   /** AI assumptions, clearly separated from observed facts (spec §9.9). */
   assumptions: string[];
 }
+
+// --- External issue tracker (jira-integration spec) -------------------------
+
+/**
+ * A link to an issue created in an external tracker from a generated report.
+ * The extension persists these keyed by the report's `artifactId`: generated
+ * artifacts are not themselves stored, so the link record stands on its own.
+ */
+export interface TrackerLink {
+  type: 'jira';
+  /** Issue key, e.g. "PROJ-123". */
+  issueKey: string;
+  /** Browse URL, e.g. "https://acme.atlassian.net/browse/PROJ-123". */
+  url: string;
+  createdAt: string;
+}
+
+/**
+ * Jira Cloud connection settings. Lives only in extension local storage — never
+ * sent to `apps/server`, never included in an LLM prompt (jira-integration spec,
+ * "Credential isolation").
+ */
+export interface JiraConfig {
+  /** Site origin, no trailing slash, e.g. "https://acme.atlassian.net". */
+  siteUrl: string;
+  /** Atlassian account email; the Basic-auth username. */
+  email: string;
+  /** Atlassian API token (v1 auth — see design.md Decision 2). */
+  apiToken: string;
+  /** Default project key, e.g. "QA". */
+  projectKey: string;
+  /** Default issue type id from createmeta, e.g. "10004". */
+  issueTypeId: string;
+  /** Report severity -> Jira priority name, e.g. `{ critical: "Highest" }`. */
+  priorityMap: Record<Priority, string>;
+  /** True once "Test connection" has succeeded against exactly these values. */
+  verified: boolean;
+}

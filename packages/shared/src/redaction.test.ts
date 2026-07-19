@@ -40,6 +40,33 @@ describe('redactText', () => {
   });
 });
 
+describe('redactText on integration credentials', () => {
+  it('masks a Basic Authorization header', () => {
+    // base64 contains + / = which fall outside the generic long-token class.
+    expect(redactText('Authorization: Basic cWFAYWNtZS5pbzp0b2sxMjM=')).toBe(
+      `Authorization: Basic ${REDACTED}`,
+    );
+  });
+
+  it('masks an Authorization header however it was serialized', () => {
+    expect(redactText('{"authorization":"Bearer abc.def.ghi"}')).toContain(`Bearer ${REDACTED}`);
+    expect(redactText('authorization=Basic Zm9vOmJhcg==')).toBe(`authorization=Basic ${REDACTED}`);
+  });
+
+  it('masks credential-bearing config keys', () => {
+    expect(redactText('{"apiToken":"tok-abc-123"}')).toBe(`{"apiToken":"${REDACTED}"}`);
+    expect(redactText('apiKey=sk-live-1234')).toBe(`apiKey=${REDACTED}`);
+    expect(redactText('client_secret: hunter2')).toBe(`client_secret: ${REDACTED}`);
+  });
+
+  it('does not mask a serialized Jira config’s non-secret fields', () => {
+    const out = redactText('{"siteUrl":"https://acme.atlassian.net","projectKey":"QA","apiToken":"tok1"}');
+    expect(out).toContain('https://acme.atlassian.net');
+    expect(out).toContain('"projectKey":"QA"');
+    expect(out).not.toContain('tok1');
+  });
+});
+
 describe('redactUrlToPath (spec §9.5)', () => {
   it('strips query string', () => {
     expect(redactUrlToPath('https://app.example.com/orders?token=abc&id=5')).toBe('/orders');

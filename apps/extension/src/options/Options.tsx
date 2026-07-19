@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { JiraConfig, Priority } from '@qa-copilot/shared';
 import {
   DEFAULT_SETTINGS,
   EMPTY_AUTH,
@@ -8,6 +9,7 @@ import {
 } from '../shared/messages.js';
 import { getAuth, saveAuth, clearAuth } from '../shared/storage.js';
 import * as bg from '../sidepanel/chrome-client.js';
+import { requestJiraOrigin } from '../integrations/jira/auth.js';
 import {
   ApiClientError,
   createProvider,
@@ -54,6 +56,8 @@ export function Options() {
       <h1 style={{ fontSize: 18 }}>QA Copilot — Settings</h1>
 
       <AccountSection backendUrl={settings.backendUrl} />
+
+      <JiraSection />
 
       <div className="section">
         <h3>Backend URL</h3>
@@ -109,6 +113,179 @@ export function Options() {
           {saved && <span className="chip ok">Saved</span>}
         </div>
       </div>
+    </div>
+  );
+}
+
+const ATLASSIAN_TOKENS_URL = 'https://id.atlassian.com/manage-profile/security/api-tokens';
+
+const SEVERITIES: Priority[] = ['critical', 'high', 'medium', 'low'];
+
+const EMPTY_JIRA_FORM: JiraConfig = {
+  siteUrl: '',
+  email: '',
+  apiToken: '',
+  projectKey: '',
+  issueTypeId: '10004',
+  priorityMap: { critical: 'Highest', high: 'High', medium: 'Medium', low: 'Low' },
+  verified: false,
+};
+
+/**
+ * Jira Cloud connection. The API token is written to the background worker and
+ * never read back — a stored token shows as a placeholder, and leaving the field
+ * blank on a re-save keeps the existing one.
+ */
+function JiraSection() {
+  const [form, setForm] = useState<JiraConfig>(EMPTY_JIRA_FORM);
+  const [hasToken, setHasToken] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [connectedAs, setConnectedAs] = useState<{ name: string; avatar?: string } | null>(null);
+  const [error, setError] = useState<{ message: string; showTokenHelp: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void bg.jiraGetConfig().then((res) => {
+      if (!res.ok || !res.data) return;
+      setForm({ ...EMPTY_JIRA_FORM, ...res.data, apiToken: '' });
+      setHasToken(res.data.hasToken);
+      setVerified(res.data.verified);
+    });
+  }, []);
+
+  const update = <K extends keyof JiraConfig>(key: K, value: JiraConfig[K]) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    setVerified(false);
+    setError(null);
+  };
+
+  /**
+   * Test then persist. The spec's "Successful connection test" scenario ends in
+   * the config being saved, so this is one action rather than two.
+   */
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    setConnectedAs(null);
+    try {
+      // Must happen here, in the click's user-gesture context — the background
+      // worker can only check the permission, not request it.
+      const granted = await requestJiraOrigin(form.siteUrl);
+      if (!granted) {
+        setError({
+          message: `Permission to access ${form.siteUrl || 'that site'} was declined, so Jira settings were not saved.`,
+          showTokenHelp: false,
+        });
+        return;
+      }
+
+      const res = await bg.jiraSaveConfig(form);
+      if (res.ok) {
+        setConnectedAs({
+          name: res.data.user.displayName,
+          avatar: res.data.user.avatarUrls?.['24x24'],
+        });
+        setForm((f) => ({ ...f, apiToken: '' }));
+        setHasToken(true);
+        setVerified(true);
+      } else {
+        setError({ message: res.message, showTokenHelp: res.code === 'unauthorized' });
+        setVerified(false);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="section">
+      <h3>Jira</h3>
+      <p className="muted">
+        Export generated bug reports to your Jira Cloud site. The API token is stored only in this
+        browser profile and is never sent to the QA Copilot backend or any LLM.
+      </p>
+
+      <input
+        type="text"
+        placeholder="Site URL (e.g. https://acme.atlassian.net)"
+        value={form.siteUrl}
+        onChange={(e) => update('siteUrl', e.target.value)}
+      />
+      <input
+        type="email"
+        placeholder="Atlassian account email"
+        value={form.email}
+        onChange={(e) => update('email', e.target.value)}
+      />
+      <input
+        type="password"
+        placeholder={hasToken ? 'API token (stored — leave blank to keep)' : 'API token'}
+        value={form.apiToken}
+        onChange={(e) => update('apiToken', e.target.value)}
+      />
+      <p className="muted">
+        Create one at <a href={ATLASSIAN_TOKENS_URL} target="_blank" rel="noreferrer">Atlassian API tokens</a>. The
+        project needs Browse Projects, Create Issues, and Create Attachments.
+      </p>
+
+      <div className="row">
+        <input
+          type="text"
+          placeholder="Default project key (e.g. QA)"
+          value={form.projectKey}
+          onChange={(e) => update('projectKey', e.target.value)}
+        />
+        <input
+          type="text"
+          placeholder="Issue type id (e.g. 10004)"
+          value={form.issueTypeId}
+          onChange={(e) => update('issueTypeId', e.target.value)}
+        />
+      </div>
+
+      <h3 style={{ fontSize: 13 }}>Severity → Jira priority</h3>
+      <div className="row">
+        {SEVERITIES.map((severity) => (
+          <label key={severity} className="muted" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            {severity}
+            <input
+              type="text"
+              style={{ width: 80 }}
+              value={form.priorityMap[severity]}
+              onChange={(e) => update('priorityMap', { ...form.priorityMap, [severity]: e.target.value })}
+            />
+          </label>
+        ))}
+      </div>
+
+      <div className="row" style={{ marginTop: 12 }}>
+        <button className="primary" disabled={busy} onClick={connect}>
+          {busy ? 'Testing…' : 'Test connection'}
+        </button>
+        {verified && !connectedAs && <span className="chip ok">Connected</span>}
+        {connectedAs && (
+          <span className="chip ok" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            {connectedAs.avatar && (
+              <img src={connectedAs.avatar} alt="" width={16} height={16} style={{ borderRadius: '50%' }} />
+            )}
+            Connected as {connectedAs.name}
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <p className="err">
+          {error.message}
+          {error.showTokenHelp && (
+            <>
+              {' '}
+              <a href={ATLASSIAN_TOKENS_URL} target="_blank" rel="noreferrer">
+                Manage API tokens
+              </a>
+            </>
+          )}
+        </p>
+      )}
     </div>
   );
 }

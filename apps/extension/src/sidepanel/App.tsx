@@ -20,6 +20,7 @@ import {
 import { downloadJson, downloadMarkdown, downloadTypeScript } from './exports.js';
 import { previewMarkdown } from './preview.js';
 import { ChatTab } from './ChatTab.js';
+import { JiraAction, type JiraExportSource } from './IssueComposer.js';
 
 /** Map an AI-task error to a role-aware, user-facing message. */
 function explainError(e: unknown, role: string | null): string {
@@ -612,6 +613,13 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
           res={bug}
           onExport={() => downloadMarkdown(`bug-report-${bug.artifactId}.md`, bug.content)}
           onPreview={() => previewMarkdown('Bug report', bug.content)}
+          jira={{
+            artifactId: bug.artifactId,
+            markdown: bug.content,
+            playwrightSpec: pw
+              ? { filename: pw.filename ?? 'test.spec.ts', content: pw.content }
+              : null,
+          }}
         />
       )}
 
@@ -655,11 +663,14 @@ function ArtifactView({
   res,
   onExport,
   onPreview,
+  jira,
 }: {
   title: string;
   res: GenerateResponse;
   onExport: () => void;
   onPreview?: () => void;
+  /** Present only for the bug report, which is the artifact Jira accepts. */
+  jira?: JiraExportSource;
 }) {
   return (
     <div>
@@ -674,6 +685,7 @@ function ArtifactView({
             Preview
           </button>
         )}
+        {jira && <JiraAction source={jira} />}
       </div>
       {res.selectorWarnings && res.selectorWarnings.length > 0 && (
         <div className="warn">

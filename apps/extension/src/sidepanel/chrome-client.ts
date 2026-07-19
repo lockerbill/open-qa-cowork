@@ -1,4 +1,12 @@
+import type { JiraConfig, TrackerLink } from '@qa-copilot/shared';
 import type { PanelState, PanelToBackground, Settings } from '../shared/messages.js';
+import type {
+  JiraConfigProjection,
+  JiraCreateIssueRequest,
+  JiraCreateIssueResult,
+  JiraResponse,
+} from '../integrations/jira/messages.js';
+import type { JiraFieldMeta, JiraUser } from '../integrations/jira/client.js';
 
 /** Typed wrapper around chrome.runtime.sendMessage for panel -> background. */
 export function sendToBackground<T = unknown>(message: PanelToBackground): Promise<T> {
@@ -29,3 +37,26 @@ export const setContext = (c: {
 }) => sendToBackground<{ ok: boolean }>({ type: 'SET_CONTEXT', ...c });
 export const clearContextOverride = () =>
   sendToBackground<{ ok: boolean }>({ type: 'CLEAR_CONTEXT_OVERRIDE' });
+
+// --- Jira export ----------------------------------------------------------
+// These resolve with a JiraResponse rather than throwing: the worker owns the
+// credentials and translates every failure into a code the UI can render.
+
+export const jiraGetConfig = () =>
+  sendToBackground<JiraResponse<JiraConfigProjection | null>>({ type: 'JIRA_GET_CONFIG' });
+export const jiraSaveConfig = (config: JiraConfig) =>
+  sendToBackground<JiraResponse<{ user: JiraUser; config: JiraConfigProjection }>>({
+    type: 'JIRA_SAVE_CONFIG',
+    config,
+  });
+export const jiraTestConnection = (config: JiraConfig) =>
+  sendToBackground<JiraResponse<{ user: JiraUser; config: JiraConfigProjection }>>({
+    type: 'JIRA_TEST_CONNECTION',
+    config,
+  });
+export const jiraGetCreateMeta = () =>
+  sendToBackground<JiraResponse<JiraFieldMeta[]>>({ type: 'JIRA_GET_CREATE_META' });
+export const jiraGetLinks = () =>
+  sendToBackground<JiraResponse<Record<string, TrackerLink>>>({ type: 'JIRA_GET_LINKS' });
+export const jiraCreateIssue = (request: JiraCreateIssueRequest) =>
+  sendToBackground<JiraResponse<JiraCreateIssueResult>>({ type: 'JIRA_CREATE_ISSUE', request });
