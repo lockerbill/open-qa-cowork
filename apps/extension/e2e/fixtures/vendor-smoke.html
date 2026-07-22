@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vendor Smoke Fixture</title>
+    <style>
+      #offscreen-zone {
+        position: absolute;
+        top: 5000px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Vendor Smoke Fixture</h1>
+    <p>Support contact: jane.doe@example.com (redaction canary)</p>
+
+    <button id="save">Save</button>
+    <button id="cancel">Cancel</button>
+    <a id="docs-link" href="/docs">Documentation</a>
+
+    <label for="username">Username</label>
+    <input id="username" name="username" />
+
+    <label for="secret">Password</label>
+    <input id="secret" name="password" type="password" value="hunter2" />
+
+    <label for="warehouse">Warehouse</label>
+    <select id="warehouse" name="warehouse">
+      <option>North</option>
+      <option>South</option>
+    </select>
+
+    <div id="editor" contenteditable="true" aria-label="Notes editor">Editable notes</div>
+
+    <dialog id="confirm-dialog" open aria-label="Confirm removal">
+      <p>Are you sure?</p>
+      <button id="dialog-confirm">Confirm</button>
+    </dialog>
+
+    <!-- React-root false-positive case: patchReact must mark #root itself
+         non-interactive while its children stay indexable. -->
+    <div id="root" onclick="void 0">
+      <button id="inside-react-root">Inside React Root</button>
+    </div>
+
+    <div aria-hidden="true">
+      <button id="aria-hidden-btn">ARIA HIDDEN BUTTON</button>
+    </div>
+
+    <div data-openqa-ignore="true">
+      <button id="ignored-btn">OPENQA IGNORED BUTTON</button>
+    </div>
+
+    <div id="offscreen-zone">
+      <button id="offscreen-btn">OFFSCREEN BUTTON</button>
+    </div>
+  </body>
+</html>

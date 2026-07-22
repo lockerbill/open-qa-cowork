@@ -133,6 +133,10 @@ export interface ActionEvent {
   timestamp: string;
   /** Observed outcome, e.g. "Validation error appeared". */
   resultSummary?: string;
+  /** 'auto' when synthesized by Auto Test Mode's executor (auto-test-mode-spec §6.4.9). */
+  source?: 'auto';
+  /** Model-stated intent behind an auto action, shown in timeline/exports. */
+  intent?: string;
 }
 
 export type EvidenceType = 'screenshot' | 'console' | 'network';

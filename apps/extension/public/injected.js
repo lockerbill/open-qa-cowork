@@ -67,8 +67,11 @@
       var start = performance.now();
       var method = (init && init.method) || (input && input.method) || 'GET';
       var url = typeof input === 'string' ? input : input && input.url;
+      // In-flight tracking for auto-mode settle (network-idle detection).
+      post({ kind: 'request-start' });
       return origFetch.apply(this, arguments).then(
         function (res) {
+          post({ kind: 'request-end' });
           if (!res.ok) {
             post({
               kind: 'network',
@@ -82,6 +85,7 @@
           return res;
         },
         function (err) {
+          post({ kind: 'request-end' });
           post({
             kind: 'network',
             method: method,
@@ -126,7 +130,10 @@
     var self = this;
     if (self.__qa) {
       self.__qa.start = performance.now();
+      // In-flight tracking for auto-mode settle; loadend always fires exactly once.
+      post({ kind: 'request-start' });
       self.addEventListener('loadend', function () {
+        post({ kind: 'request-end' });
         if (self.status === 0 || self.status >= 400) {
           post({
             kind: 'network',

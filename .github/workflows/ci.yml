@@ -13,6 +13,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # Vendored page-agent code must never contain a dynamic-code pathway
+      # (auto-test-mode-spec §4.2.1). Runs before install: needs nothing.
+      - name: Vendor eval gate
+        run: |
+          if grep -rEn --include='*.js' --include='*.ts' '\beval[[:space:]]*\(|new Function[[:space:]]*\(' apps/extension/src/vendor/page-agent; then
+            echo "::error::eval()/new Function() found in vendored page-agent code" >&2
+            exit 1
+          fi
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
 

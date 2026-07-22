@@ -16,6 +16,7 @@ import {
   selectorInputFor,
 } from './element-extract.js';
 import { selectorStrings } from '@qa-copilot/shared';
+import { shouldSkipRecorderEvent } from './auto/auto-dispatch.js';
 
 let seq = 0;
 function nextId(): string {
@@ -105,6 +106,9 @@ export function createRecorder(
   };
 
   const onClick = (e: Event) => {
+    // Auto-mode dedupe: the executor's synthetic events are mirrored as
+    // explicit source:'auto' events instead (auto-test-mode-spec §6.4.9).
+    if (shouldSkipRecorderEvent(e)) return;
     const target = e.target as Element | null;
     if (!target) return;
 
@@ -170,6 +174,7 @@ export function createRecorder(
   };
 
   const onChange = (e: Event) => {
+    if (shouldSkipRecorderEvent(e)) return;
     const el = e.target as HTMLInputElement | HTMLSelectElement | null;
     if (!el) return;
     const tag = el.tagName.toLowerCase();
@@ -205,6 +210,7 @@ export function createRecorder(
   };
 
   const onSubmit = (e: Event) => {
+    if (shouldSkipRecorderEvent(e)) return;
     const form = e.target as HTMLFormElement | null;
     const ev = baseEvent(form, 'submit');
     window.setTimeout(() => {
@@ -216,6 +222,7 @@ export function createRecorder(
 
   // Contenteditable fields fire no `change`; capture the committed text on blur.
   const onFocusOut = (e: Event) => {
+    if (shouldSkipRecorderEvent(e)) return;
     const el = (e.target as Element | null)?.closest('[contenteditable=""], [contenteditable="true"]');
     if (!el) return;
     const ev = baseEvent(el, 'input');

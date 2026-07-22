@@ -9,7 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "build:harness": "vite build -c e2e/vite.harness.config.ts",
+    "test:e2e": "pnpm build:harness && playwright test"
   },
   "dependencies": {
     "@qa-copilot/shared": "workspace:*",
