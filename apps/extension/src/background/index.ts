@@ -32,6 +32,9 @@ import {
   handleJiraMessage,
   type JiraMessage,
 } from '../integrations/jira/messages.js';
+import { handleAutoMessage, initAutoMode, isAutoMessage } from './auto/wiring.js';
+import type { AutoMessage } from './auto/messages.js';
+import { runExclusive } from './mutex.js';
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
@@ -41,14 +44,7 @@ function broadcast(): void {
   chrome.runtime.sendMessage({ type: STATE_CHANGED }).catch(() => {});
 }
 
-// --- serialized storage access -------------------------------------------
-
-let lock: Promise<unknown> = Promise.resolve();
-function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-  const run = lock.then(fn, fn);
-  lock = run.catch(() => undefined);
-  return run;
-}
+// --- serialized storage access: see ./mutex.js ----------------------------
 
 function updateSession(mutate: (session: TestSession) => void): Promise<TestSession> {
   return runExclusive(async () => {
@@ -445,7 +441,14 @@ async function addAllowlistOrigin(origin: string): Promise<boolean> {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  const msg = message as ContentToBackground | PanelToBackground;
+  const msg = message as ContentToBackground | PanelToBackground | AutoMessage;
+  // Auto Test Mode owns every AUTO_* message (§7.3); AUTO_STATE is a broadcast
+  // for the panel, not for us.
+  if (isAutoMessage(msg)) {
+    if (msg.type === 'AUTO_STATE') return false;
+    void handleAutoMessage(msg, sendResponse);
+    return true; // async sendResponse
+  }
   if (
     msg.type === 'PAGE_MODEL' ||
     msg.type === 'ACTION_EVENT' ||
@@ -470,3 +473,7 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (tab.active && changeInfo.status === 'complete') void refreshActiveTab();
 });
+
+// Auto Test Mode (auto-test-mode-spec §7): webNavigation containment watch,
+// SW-wake restore of a persisted run, and the E2E/dev start surface.
+initAutoMode();

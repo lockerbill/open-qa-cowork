@@ -7,6 +7,9 @@
   <body>
     <h1>QA Auto Playground</h1>
 
+    <!-- Cross-page navigation target for E2E scenario 5 (§13.2). -->
+    <p><a id="second-page-link" href="/auto-second.html">Go to second page</a></p>
+
     <section id="login">
       <!-- Rememberable placeholder creds (auto-test-mode-spec §13.2). -->
       <p>Sign in with qa@example.com / Secret123!</p>
@@ -25,6 +28,12 @@
     <section id="dashboard" hidden>
       <h2>Welcome back, QA!</h2>
       <button id="create-item">Create item</button>
+      <!-- Named-item create form + visible list for E2E scenario 1 (§13.2). -->
+      <form id="item-form">
+        <label for="item-name">Item name</label>
+        <input id="item-name" name="item-name" type="text" />
+        <button type="submit" id="add-item">Add item</button>
+      </form>
       <ul id="items"></ul>
     </section>
 
@@ -44,6 +53,15 @@
         const li = document.createElement('li');
         li.textContent = 'Item ' + (document.getElementById('items').children.length + 1);
         document.getElementById('items').appendChild(li);
+      });
+      document.getElementById('item-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const input = document.getElementById('item-name');
+        if (!input.value.trim()) return;
+        const li = document.createElement('li');
+        li.textContent = input.value.trim();
+        document.getElementById('items').appendChild(li);
+        input.value = '';
       });
     </script>
   </body>

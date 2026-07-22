@@ -19,6 +19,11 @@ export interface RunConfig {
   maxLlmCalls: number;
   /** Origins; first entry = start origin. */
   originAllowlist: string[];
+  /**
+   * Base URL the service worker POSTs /auto/step against. Defaults to the
+   * extension's configured backend; E2E points it at the stub decider (§13.2).
+   */
+  deciderBaseUrl?: string;
   debugHighlights?: boolean;
   /**
    * Deviation from spec §5.4 (`provider: ProviderRef`): the repo has no shared

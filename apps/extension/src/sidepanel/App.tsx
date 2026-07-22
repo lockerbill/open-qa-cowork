@@ -21,6 +21,8 @@ import { downloadJson, downloadMarkdown, downloadTypeScript } from './exports.js
 import { previewMarkdown } from './preview.js';
 import { ChatTab } from './ChatTab.js';
 import { JiraAction, type JiraExportSource } from './IssueComposer.js';
+import { AUTO_TEST_MODE } from '../shared/flags.js';
+import { AutoTab } from './auto/AutoTab.js';
 
 /** Map an AI-task error to a role-aware, user-facing message. */
 function explainError(e: unknown, role: string | null): string {
@@ -42,7 +44,7 @@ function showConfigure(e: unknown, role: string | null): boolean {
   );
 }
 
-type Tab = 'page' | 'session' | 'generate' | 'chat';
+type Tab = 'page' | 'session' | 'generate' | 'chat' | 'auto';
 
 export function App() {
   const [state, setState] = useState<PanelState | null>(null);
@@ -101,6 +103,11 @@ export function App() {
         <button className={tab === 'chat' ? 'active' : ''} onClick={() => setTab('chat')}>
           Chat
         </button>
+        {AUTO_TEST_MODE && (
+          <button className={tab === 'auto' ? 'active' : ''} onClick={() => setTab('auto')}>
+            Auto
+          </button>
+        )}
       </nav>
 
       <div className="content">
@@ -108,6 +115,7 @@ export function App() {
         {tab === 'session' && <SessionTab state={state} onChange={refresh} />}
         {tab === 'generate' && <GenerateTab state={state} settings={settings} />}
         {tab === 'chat' && <ChatTab settings={settings} />}
+        {tab === 'auto' && AUTO_TEST_MODE && <AutoTab activeOrigin={state.activeOrigin} />}
       </div>
     </div>
   );

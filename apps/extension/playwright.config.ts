@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 const FIXTURE_PORT = 5555;
 const JIRA_MOCK_PORT = 5556;
+const STUB_DECIDER_PORT = 5557;
 
 /**
  * E2E config that loads the BUILT unpacked extension into Chromium and serves
@@ -28,6 +29,14 @@ export default defineConfig({
       url: `http://127.0.0.1:${JIRA_MOCK_PORT}/__requests`,
       reuseExistingServer: true,
       env: { JIRA_MOCK_PORT: String(JIRA_MOCK_PORT) },
+    },
+    {
+      // Deterministic /auto/step implementation for the M2 scripted-decider
+      // E2E scenarios (auto-test-mode-spec §13.2).
+      command: 'pnpm exec tsx e2e/stub-decider.ts',
+      url: `http://127.0.0.1:${STUB_DECIDER_PORT}/`,
+      reuseExistingServer: true,
+      env: { STUB_DECIDER_PORT: String(STUB_DECIDER_PORT) },
     },
   ],
 });

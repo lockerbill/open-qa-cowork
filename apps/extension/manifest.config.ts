@@ -37,7 +37,8 @@ export default defineManifest({
       all_frames: false,
     },
   ],
-  permissions: ['activeTab', 'scripting', 'sidePanel', 'storage', 'tabs', 'desktopCapture', 'tabCapture'],
+  // webNavigation: auto-mode origin containment (auto-test-mode-spec §7.4).
+  permissions: ['activeTab', 'scripting', 'sidePanel', 'storage', 'tabs', 'desktopCapture', 'tabCapture', 'webNavigation'],
   host_permissions: ['http://localhost/*', 'http://127.0.0.1/*'],
   // optional_host_permissions is valid MV3 but missing from crxjs's types.
   ...({ optional_host_permissions: ['https://*/*', 'http://*/*'] } as Record<string, unknown>),

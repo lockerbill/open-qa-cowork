@@ -7,8 +7,10 @@
 import type { ConsoleEntry, NetworkFailure } from '@qa-copilot/shared';
 import { redactText, redactUrlToPath } from '@qa-copilot/shared';
 import type { BackgroundToContent, ContentToBackground } from '../shared/messages.js';
+import type { AutoToContent } from '../background/auto/messages.js';
 import { scanPage } from './scanner.js';
 import { createRecorder } from './recorder.js';
+import { handleAutoMessage } from './auto/runtime.js';
 
 // Idempotency: the loader may be injected via executeScript (immediate capture
 // on an already-open tab) and also registered for future loads. Initialize at
@@ -86,19 +88,27 @@ window.addEventListener('message', (e: MessageEvent) => {
 });
 
 // Commands from the background.
-chrome.runtime.onMessage.addListener((msg: BackgroundToContent) => {
-  switch (msg.type) {
-    case 'SCAN_PAGE':
-      scanAndSend();
-      break;
-    case 'START_RECORDING':
-      recorder.start();
-      break;
-    case 'STOP_RECORDING':
-      recorder.stop();
-      break;
-  }
-});
+chrome.runtime.onMessage.addListener(
+  (msg: BackgroundToContent | AutoToContent, _sender, sendResponse) => {
+    // Auto Test Mode messages get async responses (observe/execute results).
+    if (msg.type.startsWith('AUTO_')) {
+      void handleAutoMessage(msg as AutoToContent, sendResponse);
+      return true;
+    }
+    switch (msg.type) {
+      case 'SCAN_PAGE':
+        scanAndSend();
+        break;
+      case 'START_RECORDING':
+        recorder.start();
+        break;
+      case 'STOP_RECORDING':
+        recorder.stop();
+        break;
+    }
+    return false;
+  },
+);
 
 // SPA navigations are detected in the page world (injected.js) and relayed
 // via the 'route' message above, then rescanned.

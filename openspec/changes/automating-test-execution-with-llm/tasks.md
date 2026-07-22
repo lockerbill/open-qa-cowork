@@ -1,8 +1,8 @@
 # Tasks: Automating Test Execution with LLM
 
-> Current focus: **M1 — Vendor + PageDriver (no LLM)** (auto-test-mode-spec.md §14).
-> M1 acceptance: a hardcoded action list drives the fixture SPA login flow end-to-end, and the recorder session contains the actions with durable selectors.
-> Groups 9 is deferred scaffolding for later milestones (M2–M5); expand via `/opsx:update` when M1 lands.
+> Current focus: **M2 — Orchestrator + stub decider** (auto-test-mode-spec.md §14).
+> M2 acceptance: E2E scenarios 1, 5, 6, 8, 9 (§13.2) green with the deterministic stub decider driving the full extension loop.
+> M1 (groups 1–8) is complete — see the M1 implementation notes after group 8. Group 15 is deferred scaffolding for M3–M5; expand via `/opsx:update` when M2 lands.
 
 ## 1. Shared auto types (`packages/shared/src/auto/`)
 
@@ -74,9 +74,66 @@
 - **`ObservedElement.isSecret` is restricted to fillable elements** (input/textarea/select/contenteditable): a `<label for="password">` must not inherit the flag (it broke fill targeting in acceptance).
 - **The observation builder feeds `[data-page-agent-not-interactive]` roots into the interactive blacklist** — upstream does this in `PageController`, which we deliberately don't vendor.
 
-## 9. Later milestones (deferred — expand via /opsx:update after M1)
+## 9. AUTO_* messaging + run-controller state machine (`background/auto/`)
 
-- [ ] 9.1 M2 — Orchestrator + stub decider: run controller state machine, `AUTO_*` messages, navigation handling, epoch/staleness loop, SW-restart persistence, stop-overlay wiring; E2E scenarios 1, 5, 6, 8, 9 (§7, §13.2, §14)
-- [ ] 9.2 M3 — Server `POST /auto/step` + real model observe-only: prompt, provider adaptation, validation, correction turns, history compression (§8, §14)
-- [ ] 9.3 M4 — Guardrails + confirm mode + credential vault: full guard layer, confirmation flow, defect/assertion plumbing into `RunResult`; E2E scenarios 2, 3, 4, 7; secret-absence instrumentation (§9, §14)
-- [ ] 9.4 M5 — UI polish + generator integration + eval harness: result view, exports, bug-report prefill, Playwright intent comments, baseline eval scores (§10–§11, §13.3, §14)
+- [x] 9.1 Create `messages.ts` with typed `AUTO_*` messages via the existing messaging util: SW→CS `AUTO_OBSERVE {runId}`, `AUTO_EXECUTE {runId, epoch, action}`, `AUTO_SHOW_OVERLAY`, `AUTO_HIDE_OVERLAY`; CS→SW `AUTO_USER_STOP {runId}`, `AUTO_USER_INTERVENED {runId}`; Panel→SW `AUTO_START {config}`, `AUTO_PAUSE`, `AUTO_RESUME`, `AUTO_STOP`, `AUTO_CONFIRMATION {approved, note?}`, `AUTO_GET_STATE`; SW→Panel `AUTO_STATE {status, trace, budgets}` pushed on every change; every message carries `runId`, stale-`runId` messages dropped and logged (§7.3)
+- [x] 9.2 Content-script wiring: `AUTO_OBSERVE`/`AUTO_EXECUTE`/overlay handlers own a per-run `PageDriver` instance (created on first observe for a `runId`, disposed on stop/hide) and route the M1 stop-overlay callbacks to `AUTO_USER_STOP`/`AUTO_USER_INTERVENED` (§6.6, §7.3)
+- [x] 9.3 Create `run-controller.ts` state machine: `idle → starting → observing → deciding → guarding → (awaiting_confirmation) → executing → post_step → …loop… → finalizing → done`; `paused` reachable from any active state; resume always returns to `observing`; one active run per browser profile (§7.1)
+- [x] 9.4 Unit tests: transition matrix (legal + illegal transitions), stale-`runId` drop is logged, resume re-observes, `AUTO_STATE` pushed on every transition
+
+## 10. Step loop, decider client, guard scaffold, budgets
+
+- [x] 10.1 Implement the per-step loop (§7.2): `AUTO_OBSERVE` (retry once after re-injecting the content script on no-response) → budget check → assemble `StepRequest` (goal fixed at run start, history, current observation, mode, placeholder names) → decider call → guard verdict → `AUTO_EXECUTE` → append `TraceStep` → push `AUTO_STATE`; M2 history is the verbatim `HistoryEntry` list (deterministic compression lands in M3 §7.5)
+- [x] 10.2 Decider client: `POST {baseUrl}/auto/step` using the shared `StepRequest`/`StepResponse` types, base URL configurable via `RunConfig` so E2E targets the stub decider (real server endpoint lands in M3 §8)
+- [x] 10.3 Create `guard.ts` scaffold: ordered-check pipeline returning allow/confirm/refuse with first-hit-wins; M2 activates origin lock for `navigate` targets and budget checks only (mode gate, destructive policy, credential vault, loop detection land in M4 §9); every refusal recorded as `HistoryEntry{result:'refused'}` with a model-visible reason and counts as a step
+- [x] 10.4 `stale_epoch` from `AUTO_EXECUTE` → re-observe and re-decide once per step without consuming the step counter (§7.2)
+- [x] 10.5 `finish` action → `finalizing` → `RunResult` records the model's outcome and reason; `failed` results land in history visible to the decider
+- [x] 10.6 Budgets: `maxSteps` (default 25, hard cap 60), `maxWallClockMs` (default 10 min), `maxLlmCalls` (default `maxSteps + 10`) checked every iteration → finalize `stopped_by_budget` retaining the partial trace (§9.6)
+- [x] 10.7 Unit tests: each budget exhaustion path, stale-epoch single retry (second stale epoch in the same step fails the step), goal immutability across steps, finish finalizes, refusal consumes a step
+
+## 11. Navigation handling
+
+- [x] 11.1 On `actionResult.navigated` or `webNavigation.onCommitted` for the run's tab: await `tabs.onUpdated status === 'complete'`, ping the content script with retry/backoff up to 5 s, programmatic re-injection via `chrome.scripting.executeScript` matching how the extension already injects (§7.4)
+- [x] 11.2 Off-allowlist origin → pause with detail `left_allowed_origin: <url>` offering Resume/Stop; never drive actions on a non-allowlisted origin (§7.4)
+- [x] 11.3 Unit tests with mocked `chrome.tabs`/`webNavigation`/`scripting`: re-handshake flow, unreachable content script → re-inject, off-origin pause
+
+## 12. SW-restart persistence + kill-switch wiring
+
+- [x] 12.1 Persist `{runId, config, status, trace, historyCompact, budgets}` to `chrome.storage.session` after every state transition (§7.1)
+- [x] 12.2 On SW wake with a persisted `running` run → transition to `paused` with detail `service_worker_restarted`, trace intact, Resume surfaced; no transparent auto-resume in v1 (§7.1)
+- [x] 12.3 Wire overlay lifecycle to the run: `AUTO_SHOW_OVERLAY` on start/resume, `AUTO_HIDE_OVERLAY` on finalize; `AUTO_USER_STOP` → finalize `stopped_by_user`; `AUTO_USER_INTERVENED` → `paused` (§6.6, §7.3)
+- [x] 12.4 Unit tests: persistence written per transition, wake→paused with detail and intact trace, stop finalizes, intervention pauses
+
+## 13. Stub decider, fixture expansion, minimal run entry
+
+- [x] 13.1 Stub decider implementing the `/auto/step` contract on the existing fixture server: deterministic scripted action sequences selected per scenario (keyed by goal or request header), validating incoming `StepRequest` shape against the shared zod schemas (§13.2)
+- [x] 13.2 Extend `#auto-playground`: item CRUD (create form + visible list) for scenario 1 and a cross-page link to a second fixture page for scenario 5; defer delete/confirm, validation, 500-button, spinner, and injection-canary fixtures to M4/M5 (§13.2)
+- [x] 13.3 Minimal run entry: flag-gated Auto tab stub (goal input, mode display, Start/Stop, status + trace readout) sufficient for E2E and dev to drive `AUTO_START`/`AUTO_STOP`/`AUTO_GET_STATE`; full setup/run/result UI is M5 (§10, §12)
+
+## 14. M2 E2E + acceptance (scripted stub decider, §13.2)
+
+- [x] 14.1 Scenario 1 — happy path: login → create item → assert visible → `finish(pass)`; assert trace, recorder session (`source:'auto'` events), and Playwright draft contain the steps with durable selectors
+- [x] 14.2 Scenario 5 — navigation: cross-page click re-handshakes and the loop continues with a fresh observation
+- [x] 14.3 Scenario 6 — stale epoch: stub replays an old epoch; executor rejects; SW re-observes once and continues
+- [x] 14.4 Scenario 8 — budget: `maxSteps=3` stops cleanly as `stopped_by_budget` with the partial trace available
+- [x] 14.5 Scenario 9 — kill switch: overlay Stop ends the run; a trusted keypress outside the overlay pauses it
+- [x] 14.6 Run full validation checklist (lint incl. boundary rule, CI grep, unit + smoke + new E2E suites green)
+
+### M2 implementation notes (deviations from the source spec, per its preamble)
+
+- **SW session writes serialize through a shared mutex** (`background/mutex.ts`): the wiring's start/stop-recording writes must hold the same lock as the message handlers' `updateSession` — an in-flight `PAGE_MODEL` read-modify-write otherwise clobbers the fresh recording session (found by E2E scenario 1: zero auto events recorded).
+- **Hard navigations tear down the content script before `AUTO_EXECUTE` responds** — the channel closes and the `{navigated:true}` result is lost. The controller catches the rejection, confirms via the tab URL, and synthesizes a navigated success (§7.4 addition); that step's `durableSelector` is unrecoverable.
+- **Overlay lifecycle**: shown via idempotent "ensure" after every observation (navigations destroy the pill; the content script may not be ready at `AUTO_START`), hidden while paused so trusted input doesn't re-signal intervention, re-shown on resume.
+- **Pause between decide and execute abandons the step** without consuming the step counter — the decision targeted a page the human may have changed; resume re-observes (§7.1's "always re-observe" applied mid-step).
+- **`RunConfig.deciderBaseUrl` added** (shared type): the SW POSTs `{base}/auto/step` there, falling back to the extension's configured backend URL; E2E points it at the stub decider on the fixture server.
+- **`BudgetSnapshot.staleEpochRetries`** exposes §7.2's re-decide count so scenario 6 can assert exactly one retry through the real loop.
+- **E2E entry surface**: the SW exposes `globalThis.__openqaAuto` (start/pause/resume/stop/getState) so Playwright drives runs via `worker.evaluate`; the flag-gated Auto tab stub is the human entry point.
+- **`webNavigation` permission** added to the manifest for §7.4 origin containment.
+- **Invalid decider output** records the step as `failed (model_output_invalid)` after the SW's defensive `zAction` re-validation — correction turns land in M3 with the real endpoint.
+- The stub decider validates `StepRequest` with a zod schema built on the shared `zAction` (there is no shared `zStepRequest` — the shared step types are interfaces only) and runs via `tsx` so it can import workspace TS.
+
+## 15. Later milestones (deferred — expand via /opsx:update after M2)
+
+- [ ] 15.1 M3 — Server `POST /auto/step` + real model observe-only: prompt, provider adaptation, validation, correction turns, history compression (§8, §14)
+- [ ] 15.2 M4 — Guardrails + confirm mode + credential vault: full guard layer, confirmation flow, defect/assertion plumbing into `RunResult`; E2E scenarios 2, 3, 4, 7; secret-absence instrumentation (§9, §14)
+- [ ] 15.3 M5 — UI polish + generator integration + eval harness: result view, exports, bug-report prefill, Playwright intent comments, baseline eval scores (§10–§11, §13.3, §14)
