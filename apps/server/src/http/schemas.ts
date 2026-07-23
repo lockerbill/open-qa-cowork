@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { zStepRequest } from '@qa-copilot/shared/auto';
 
 const pageModelSchema = z
   .object({
@@ -194,3 +195,14 @@ export const aiChatSchema = z.object({
   ...aiTaskContextFields,
 });
 export type ChatBody = z.infer<typeof chatSchema>;
+
+/**
+ * POST /auto/step body: the shared StepRequest contract plus the layered
+ * provider-resolution context the other gateway tasks carry (project default →
+ * workspace default).
+ */
+export const autoStepSchema = zStepRequest.extend({
+  projectId: z.string().optional(),
+  environmentId: z.string().optional(),
+});
+export type AutoStepBody = z.infer<typeof autoStepSchema>;

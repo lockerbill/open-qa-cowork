@@ -10,38 +10,15 @@
  * model would read them, never from CSS selectors.
  */
 import { createServer } from 'node:http';
-import { z } from 'zod';
-import { zAction, type Action, type StepRequest, type StepResponse } from '@qa-copilot/shared/auto';
+import {
+  zAction,
+  zStepRequest,
+  type Action,
+  type StepRequest,
+  type StepResponse,
+} from '@qa-copilot/shared/auto';
 
 const PORT = Number(process.env.STUB_DECIDER_PORT ?? 5557);
-
-/** Shape gate for incoming StepRequests (§5.3), built on the shared zod. */
-const zStepRequest = z.object({
-  goal: z.string().min(1),
-  mode: z.enum(['observe_only', 'confirm', 'autonomous']),
-  history: z.array(
-    z.object({
-      step: z.number().int(),
-      action: zAction,
-      result: z.enum(['ok', 'failed', 'refused', 'confirmed_by_user', 'rejected_by_user']),
-      resultDetail: z.string().optional(),
-      urlAfter: z.string(),
-      newErrors: z.number(),
-    }),
-  ),
-  observation: z.object({
-    url: z.string(),
-    title: z.string(),
-    serialized: z.string(),
-    elementCount: z.number(),
-    epoch: z.number(),
-    consoleErrors: z.array(z.string()),
-    failedRequests: z.array(z.unknown()),
-    navigationOccurred: z.boolean(),
-  }).passthrough(),
-  stepsRemaining: z.number(),
-  placeholders: z.array(z.string()),
-});
 
 /** Find an element index in the serialized snapshot, model-style. */
 function indexOf(serialized: string, pattern: RegExp): number {

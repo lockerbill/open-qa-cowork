@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   Action,
+  HistoryEntry,
   Observation,
   RunConfig,
   StepRequest,
@@ -20,7 +21,12 @@ import type {
   PersistedAutoRun,
   RunPhase,
 } from './messages.js';
-import { clampConfig, RunController, type RunControllerDeps } from './run-controller.js';
+import {
+  clampConfig,
+  DeciderValidationError,
+  RunController,
+  type RunControllerDeps,
+} from './run-controller.js';
 
 const ORIGIN = 'http://localhost:5555';
 
@@ -378,13 +384,30 @@ describe('step loop and budgets (10.7)', () => {
     expect(final.trace[0]!.step).toBe(1);
     // The refusal reason is model-visible: the next StepRequest's history has it.
     const lastRequest = h.requests[h.requests.length - 1]!;
-    expect(lastRequest.history[0]!.result).toBe('refused');
-    expect(lastRequest.history[0]!.resultDetail).toBe('navigation outside allowed origin');
+    const refusedEntry = lastRequest.history[0] as HistoryEntry;
+    expect(refusedEntry.result).toBe('refused');
+    expect(refusedEntry.resultDetail).toBe('navigation outside allowed origin');
     // The refused navigate never reached the executor — only the finish did.
     expect(h.execute).toHaveBeenCalledTimes(1);
   });
 
-  it('an invalid decider action records the step as failed (model_output_invalid)', async () => {
+  it('records an observe-only refusal as HistoryEntry{refused} visible to the model (§9.2)', async () => {
+    const h = makeHarness();
+    const fill: Action = { type: 'fill', index: 0, value: 'x', intent: 'type into the form' };
+    scriptDecider(h, [fill, FINISH]);
+    await h.controller.start(makeConfig({ mode: 'observe_only' }), 1);
+    const final = await h.waitForStatus('finished');
+
+    expect(final.trace[0]!.result).toBe('refused');
+    expect(final.trace[0]!.resultDetail).toBe('observe-only mode');
+    const refusedEntry = h.requests[h.requests.length - 1]!.history[0] as HistoryEntry;
+    expect(refusedEntry.result).toBe('refused');
+    expect(refusedEntry.resultDetail).toBe('observe-only mode');
+    // The refused fill never reached the executor — only the finish did.
+    expect(h.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers from invalid output via a correction turn (§8.5)', async () => {
     const h = makeHarness();
     let call = 0;
     h.decide.mockImplementation(async () => {
@@ -395,10 +418,137 @@ describe('step loop and budgets (10.7)', () => {
     });
     await h.controller.start(makeConfig(), 1);
     const final = await h.waitForStatus('finished');
+
+    // The correction re-POSTs the SAME StepRequest plus the correction note.
+    expect(h.requests).toHaveLength(2);
+    expect(h.requests[0]!.correction).toBeUndefined();
+    expect(h.requests[1]!.correction).toContain("type 'execute_js'");
+    expect(h.requests[1]!.observation.epoch).toBe(h.requests[0]!.observation.epoch);
+
+    // Correction consumed an LLM call but no step; no failed step recorded.
+    expect(final.budgets.llmCalls).toBe(2);
+    expect(final.budgets.correctionTurns).toBe(1);
+    expect(final.budgets.stepsUsed).toBe(1);
+    expect(final.trace).toHaveLength(1);
+    expect(final.trace[0]!.action.type).toBe('finish');
+  });
+
+  it('a server 422 (DeciderValidationError) triggers a correction turn', async () => {
+    const h = makeHarness();
+    let call = 0;
+    h.decide.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) throw new DeciderValidationError("type 'click': index: Required");
+      return { action: FINISH };
+    });
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('finished');
+    expect(h.requests[1]!.correction).toBe("type 'click': index: Required");
+    expect(final.budgets.correctionTurns).toBe(1);
+    expect(final.status).toBe('finished');
+  });
+
+  it('gives up after 2 corrections and records failed (model_output_invalid), then re-observes', async () => {
+    const h = makeHarness();
+    let call = 0;
+    h.decide.mockImplementation(async () => {
+      call += 1;
+      return call <= 3
+        ? ({ action: { type: 'execute_js', code: 'alert(1)' } } as unknown as StepResponse)
+        : { action: FINISH };
+    });
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('finished');
+
     expect(final.trace[0]!.result).toBe('failed');
     expect(final.trace[0]!.resultDetail).toBe('model_output_invalid');
+    // 1 attempt + 2 corrections for step 1, then the finish decision.
+    expect(final.budgets.llmCalls).toBe(4);
+    expect(final.budgets.correctionTurns).toBe(2);
     // The invalid action never reached the executor — only the finish did.
     expect(h.execute).toHaveBeenCalledTimes(1);
+    // The failed step continued with a FRESH observation (§8.5).
+    expect(h.observe.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(h.requests[3]!.observation.epoch).toBeGreaterThan(h.requests[0]!.observation.epoch);
+    // The invalid output is model-visible in later history.
+    const failedEntry = h.requests[3]!.history[0] as HistoryEntry;
+    expect(failedEntry.result).toBe('failed');
+    expect((failedEntry.action as { type: string }).type).toBe('execute_js');
+  });
+
+  it('corrections count against maxLlmCalls, not maxSteps', async () => {
+    const h = makeHarness();
+    h.decide.mockResolvedValue({
+      action: { type: 'execute_js' },
+    } as unknown as StepResponse);
+    await h.controller.start(makeConfig({ maxLlmCalls: 2 }), 1);
+    const final = await h.waitForStatus('stopped_by_budget');
+
+    // One step burned 3 LLM calls (attempt + 2 corrections) but only 1 step.
+    expect(final.budgets.stepsUsed).toBe(1);
+    expect(final.budgets.llmCalls).toBe(3);
+    expect(final.detail).toBe('max LLM calls reached');
+  });
+
+  it('abandons a correction sequence cleanly on pause mid-step, resuming with a fresh observation', async () => {
+    const h = makeHarness();
+    let call = 0;
+    h.decide.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        // Invalid output AND the user pauses while the decide was in flight.
+        h.controller.pause('paused_by_user');
+        return { action: { type: 'execute_js' } } as unknown as StepResponse;
+      }
+      return { action: FINISH };
+    });
+    await h.controller.start(makeConfig(), 1);
+    await h.waitForStatus('paused');
+
+    // No correction POST fired while paused; no step was recorded.
+    expect(h.requests).toHaveLength(1);
+    expect(h.lastState().trace).toHaveLength(0);
+
+    h.controller.resume();
+    const final = await h.waitForStatus('finished');
+    // The post-resume request is a fresh step: new observation, no correction.
+    expect(h.requests[1]!.correction).toBeUndefined();
+    expect(h.requests[1]!.observation.epoch).toBeGreaterThan(h.requests[0]!.observation.epoch);
+    expect(final.budgets.stepsUsed).toBe(1);
+  });
+
+  it('retries once on a transient decider failure, then finalizes error on a second', async () => {
+    const h = makeHarness();
+    let call = 0;
+    h.decide.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) throw new Error('decider HTTP 502');
+      return { action: FINISH };
+    });
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('finished');
+    expect(final.budgets.llmCalls).toBe(2);
+    expect(final.budgets.correctionTurns).toBe(0);
+
+    // A second transport failure in the same step still finalizes the run.
+    const h2 = makeHarness();
+    h2.decide.mockRejectedValue(new Error('decider HTTP 502'));
+    await h2.controller.start(makeConfig(), 1);
+    const errored = await h2.waitForStatus('error');
+    expect(errored.detail).toContain('decider HTTP 502');
+    expect(errored.budgets.llmCalls).toBe(1);
+  });
+
+  it('finalizes immediately when stopped mid-correction', async () => {
+    const h = makeHarness();
+    h.decide.mockImplementation(async () => {
+      h.controller.stop();
+      return { action: { type: 'execute_js' } } as unknown as StepResponse;
+    });
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('stopped_by_user');
+    expect(h.requests).toHaveLength(1);
+    expect(final.trace).toHaveLength(0);
   });
 
   it('backfills the previous step evidence from the next observation', async () => {
@@ -422,7 +572,7 @@ describe('step loop and budgets (10.7)', () => {
       { method: 'POST', url: '/api/save', status: 500 },
     ]);
     const finishRequest = h.requests[h.requests.length - 1]!;
-    expect(finishRequest.history[0]!.newErrors).toBe(1);
+    expect((finishRequest.history[0] as HistoryEntry).newErrors).toBe(1);
   });
 });
 

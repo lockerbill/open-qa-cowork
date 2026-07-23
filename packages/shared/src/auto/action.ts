@@ -102,11 +102,102 @@ export interface ProviderToolDef {
   inputSchema: Record<string, unknown>;
 }
 
+const ACTION_SCHEMAS: Record<Action['type'], { schema: z.ZodObject<z.ZodRawShape>; description: string }> = {
+  click: { schema: zClick, description: 'Click the element at [index].' },
+  fill: {
+    schema: zFill,
+    description:
+      'Type a value into the input at [index], replacing its current content. ' +
+      'Use {{PLACEHOLDER}} tokens verbatim for credentials.',
+  },
+  select: {
+    schema: zSelect,
+    description: 'Choose an option of the dropdown at [index] by its visible text.',
+  },
+  press: { schema: zPress, description: 'Press a key on the currently focused element.' },
+  scroll: { schema: zScroll, description: 'Scroll the page vertically.' },
+  navigate: { schema: zNavigate, description: 'Navigate the tab to a same-origin URL.' },
+  wait: { schema: zWait, description: 'Wait for the page to make progress before observing again.' },
+  assert: {
+    schema: zAssert,
+    description:
+      'Record a verdict on an expectation against the current observation. Does not touch the page.',
+  },
+  report_defect: {
+    schema: zReportDefect,
+    description: 'Report a bug you found, with expected vs actual. Does not touch the page.',
+  },
+  finish: {
+    schema: zFinish,
+    description: 'End the run with an overall outcome. Emit before the step budget runs out.',
+  },
+};
+
 /**
- * Tool definitions for providers that support function calling — one tool per
- * action type, names = action type. Implemented in M3 (server provider
- * adaptation, §8.3); nothing may call this before then.
+ * Derive the JSON-Schema fragment for one zod field. Handles exactly the
+ * constructs the action schemas use (number/int/min/max, string/max, enum,
+ * boolean, default, optional) — extend it if a new construct is added, and the
+ * tool-def unit tests will catch anything unhandled.
+ */
+function fieldToJsonSchema(field: z.ZodTypeAny): Record<string, unknown> {
+  const def = field._def as { typeName: string };
+  if (field instanceof z.ZodDefault) {
+    const inner = fieldToJsonSchema(field._def.innerType as z.ZodTypeAny);
+    return { ...inner, default: field._def.defaultValue() };
+  }
+  if (field instanceof z.ZodOptional) {
+    return fieldToJsonSchema(field._def.innerType as z.ZodTypeAny);
+  }
+  if (field instanceof z.ZodNumber) {
+    const out: Record<string, unknown> = { type: 'number' };
+    for (const check of field._def.checks) {
+      if (check.kind === 'int') out.type = 'integer';
+      if (check.kind === 'min') out.minimum = check.value;
+      if (check.kind === 'max') out.maximum = check.value;
+    }
+    return out;
+  }
+  if (field instanceof z.ZodString) {
+    const out: Record<string, unknown> = { type: 'string' };
+    for (const check of field._def.checks) {
+      if (check.kind === 'min') out.minLength = check.value;
+      if (check.kind === 'max') out.maxLength = check.value;
+      if (check.kind === 'url') out.format = 'uri';
+    }
+    return out;
+  }
+  if (field instanceof z.ZodEnum) {
+    return { type: 'string', enum: [...(field._def.values as string[])] };
+  }
+  if (field instanceof z.ZodBoolean) {
+    return { type: 'boolean' };
+  }
+  throw new Error(`actionToolDefs: unhandled zod construct '${def.typeName}'`);
+}
+
+/**
+ * Tool definitions for providers that support function calling (§8.3): one
+ * tool per action type, name = the action type, parameters = JSON Schema
+ * derived from the zod objects. The `type` discriminator is omitted from the
+ * input schema — the tool NAME carries it; the server reconstructs the action
+ * as `{ ...input, type: name }` before zAction validation.
  */
 export function actionToolDefs(): ProviderToolDef[] {
-  throw new Error('actionToolDefs() lands in M3 (auto-test-mode-spec §8.3)');
+  return (Object.keys(ACTION_SCHEMAS) as Action['type'][]).map((type) => {
+    const { schema, description } = ACTION_SCHEMAS[type];
+    const properties: Record<string, unknown> = {};
+    const required: string[] = [];
+    for (const [key, field] of Object.entries(schema.shape)) {
+      if (key === 'type') continue;
+      properties[key] = fieldToJsonSchema(field as z.ZodTypeAny);
+      if (!(field instanceof z.ZodOptional) && !(field instanceof z.ZodDefault)) {
+        required.push(key);
+      }
+    }
+    return {
+      name: type,
+      description,
+      inputSchema: { type: 'object', properties, required, additionalProperties: false },
+    };
+  });
 }

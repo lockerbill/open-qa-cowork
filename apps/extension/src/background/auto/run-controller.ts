@@ -24,6 +24,7 @@ import type {
 } from '@qa-copilot/shared/auto';
 import { RUN_DEFAULTS, zAction } from '@qa-copilot/shared/auto';
 import { checkAction, isOriginAllowed } from './guard.js';
+import { compressHistory } from './history.js';
 import type {
   AutoExecuteResponse,
   AutoObserveResponse,
@@ -33,6 +34,18 @@ import type {
   RunPhase,
 } from './messages.js';
 
+/**
+ * Thrown by the decide dep on a 422 {error:'invalid_action'} response (§8.4).
+ * The controller answers with a correction turn (§8.5) instead of failing the
+ * run.
+ */
+export class DeciderValidationError extends Error {
+  constructor(readonly detail: string) {
+    super(`invalid_action: ${detail}`);
+    this.name = 'DeciderValidationError';
+  }
+}
+
 export interface RunControllerDeps {
   /** Send AUTO_OBSERVE; MUST reject when the content script is unreachable. */
   observe(tabId: number, runId: string, sessionId: string): Promise<AutoObserveResponse>;
@@ -40,7 +53,10 @@ export interface RunControllerDeps {
   showOverlay(tabId: number, runId: string): Promise<void>;
   hideOverlay(tabId: number, runId: string): Promise<void>;
   injectContentScript(tabId: number): Promise<boolean>;
-  /** POST {baseUrl}/auto/step (§8 contract; stub decider in M2 E2E). */
+  /**
+   * POST {baseUrl}/auto/step (§8 contract; stub decider in M2 E2E). MUST throw
+   * DeciderValidationError on a 422 so the controller can run correction turns.
+   */
   decide(baseUrl: string, request: StepRequest): Promise<StepResponse>;
   getTabUrl(tabId: number): Promise<string | null>;
   /** Resolve when the tab reaches status 'complete' (or on timeout). */
@@ -59,6 +75,10 @@ export interface RunControllerDeps {
 const HANDSHAKE_TIMEOUT_MS = 5000;
 const HANDSHAKE_BACKOFF_MS = [200, 400, 800, 1600, 1600];
 const TAB_LOAD_TIMEOUT_MS = 10_000;
+/** Max correction turns per step (§8.5); they consume maxLlmCalls, not maxSteps. */
+const MAX_CORRECTIONS_PER_STEP = 2;
+/** One transient-decider-failure retry per step (502/504/network hiccup). */
+const DECIDER_RETRY_BACKOFF_MS = 2000;
 
 const FINAL_STATUSES: readonly RunStatus[] = [
   'finished',
@@ -82,6 +102,7 @@ interface RunInternal {
   llmCalls: number;
   startedAt: number;
   staleEpochRetries: number;
+  correctionTurns: number;
   finalStatus?: RunStatus;
   outcome?: 'pass' | 'fail' | 'blocked';
   reason?: string;
@@ -131,6 +152,7 @@ export class RunController {
       llmCalls: 0,
       startedAt: this.deps.now(),
       staleEpochRetries: 0,
+      correctionTurns: 0,
     };
     await this.transition('starting');
     await this.ensureOverlay();
@@ -234,6 +256,7 @@ export class RunController {
       llmCalls: persisted.budgets.llmCalls,
       startedAt: persisted.budgets.startedAt,
       staleEpochRetries: persisted.budgets.staleEpochRetries,
+      correctionTurns: persisted.budgets.correctionTurns ?? 0,
     };
     await this.persistAndPush();
   }
@@ -275,6 +298,7 @@ export class RunController {
       elapsedMs: this.deps.now() - run.startedAt,
       maxWallClockMs: run.config.maxWallClockMs,
       staleEpochRetries: run.staleEpochRetries,
+      correctionTurns: run.correctionTurns,
     };
   }
 
@@ -310,6 +334,7 @@ export class RunController {
         llmCalls: run.llmCalls,
         startedAt: run.startedAt,
         staleEpochRetries: run.staleEpochRetries,
+        correctionTurns: run.correctionTurns,
       },
       ...(run.outcome !== undefined && { outcome: run.outcome }),
       ...(run.reason !== undefined && { reason: run.reason }),
@@ -443,25 +468,14 @@ export class RunController {
     // does not consume a step (§7.2).
     for (let attempt = 0; ; attempt++) {
       await this.transition('deciding');
-      const resumesBefore = this.resumeCount;
-      let response: StepResponse;
-      try {
-        response = await this.deps.decide(this.deciderBaseUrl(), this.stepRequest(observation));
-      } catch (err) {
-        await this.finalize('error', `decider: ${err instanceof Error ? err.message : String(err)}`);
-        return 'finalized';
-      }
-      run.llmCalls += 1;
-      if (await this.controlPoint()) return 'finalized';
-      // Paused between decide and execute: the decision targets a page the
-      // human may have changed — abandon the step; resume re-observes (§7.1).
-      if (this.resumeCount !== resumesBefore) return 'continue';
-
-      // Defensive re-validation in the SW (§5); correction turns land in M3.
-      const parsed = zAction.safeParse(response.action);
-      if (!parsed.success) {
+      const decided = await this.decideWithCorrections(observation);
+      if (decided.kind === 'finalized') return 'finalized';
+      if (decided.kind === 'abandoned') return 'continue';
+      if (decided.kind === 'invalid') {
+        // Correction turns exhausted (§8.5): record the step as failed and
+        // continue with a fresh observation on the next loop iteration.
         await this.recordStep(
-          response.action,
+          decided.candidate,
           'failed',
           'model_output_invalid',
           undefined,
@@ -470,7 +484,7 @@ export class RunController {
         );
         return 'continue';
       }
-      const action = parsed.data;
+      const action = decided.action;
 
       await this.transition('guarding');
       const verdict = checkAction(action, elements, run.config);
@@ -533,6 +547,82 @@ export class RunController {
     }
   }
 
+  /**
+   * Decide phase with correction turns (§8.5): a server 422
+   * (DeciderValidationError) or a failed SW-side re-validation re-POSTs the
+   * SAME StepRequest plus a correction note — at most twice per step, counted
+   * against maxLlmCalls, never maxSteps. Pause/stop mid-decide abandons the
+   * step (and any correction sequence) cleanly; resume re-observes.
+   */
+  private async decideWithCorrections(
+    observation: Observation,
+  ): Promise<
+    | { kind: 'action'; action: Action }
+    | { kind: 'invalid'; candidate: Action }
+    | { kind: 'abandoned' }
+    | { kind: 'finalized' }
+  > {
+    const run = this.run!;
+    let correction: string | undefined;
+    let lastCandidate: unknown;
+    let transportRetried = false;
+    for (let corrections = 0; ; ) {
+      const resumesBefore = this.resumeCount;
+      let response: StepResponse | null = null;
+      let invalidDetail: string | null = null;
+      try {
+        response = await this.deps.decide(
+          this.deciderBaseUrl(),
+          this.stepRequest(observation, correction),
+        );
+      } catch (err) {
+        if (err instanceof DeciderValidationError) {
+          invalidDetail = err.detail;
+          lastCandidate = undefined;
+        } else if (!transportRetried) {
+          // A single provider hiccup (502/504/network) must not kill the run:
+          // retry once per step, still counted against maxLlmCalls.
+          transportRetried = true;
+          run.llmCalls += 1;
+          this.deps.log(
+            `auto: decider failed, retrying once: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          if (await this.controlPoint()) return { kind: 'finalized' };
+          if (this.resumeCount !== resumesBefore) return { kind: 'abandoned' };
+          await this.deps.sleep(DECIDER_RETRY_BACKOFF_MS);
+          continue;
+        } else {
+          await this.finalize(
+            'error',
+            `decider: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return { kind: 'finalized' };
+        }
+      }
+      run.llmCalls += 1;
+      if (await this.controlPoint()) return { kind: 'finalized' };
+      // Paused between decide and execute: the decision targets a page the
+      // human may have changed — abandon the step; resume re-observes (§7.1).
+      if (this.resumeCount !== resumesBefore) return { kind: 'abandoned' };
+
+      if (response) {
+        // Defensive re-validation in the SW (§5).
+        const parsed = zAction.safeParse(response.action);
+        if (parsed.success) return { kind: 'action', action: parsed.data };
+        lastCandidate = response.action;
+        invalidDetail = formatActionIssues(response.action, parsed.error);
+      }
+
+      if (corrections >= MAX_CORRECTIONS_PER_STEP) {
+        return { kind: 'invalid', candidate: normalizeInvalidCandidate(lastCandidate) };
+      }
+      corrections += 1;
+      run.correctionTurns += 1;
+      correction = (invalidDetail ?? 'invalid output').slice(0, 500);
+      this.deps.log(`auto: correction turn ${corrections}: ${correction}`);
+    }
+  }
+
   /** Append TraceStep + HistoryEntry; every recorded step consumes the counter. */
   private async recordStep(
     action: Action,
@@ -583,17 +673,19 @@ export class RunController {
     if (lastHistory) lastHistory.newErrors = observation.consoleErrors.length;
   }
 
-  private stepRequest(observation: Observation): StepRequest {
+  private stepRequest(observation: Observation, correction?: string): StepRequest {
     const run = this.run!;
     return {
       goal: run.goal,
       mode: run.config.mode,
-      // M2: verbatim history; deterministic compression lands in M3 (§7.5).
-      history: [...run.history],
+      // Deterministic compression (§7.5): >20 entries → last 12 verbatim +
+      // one synthetic line per 5 older steps.
+      history: compressHistory(run.history),
       observation,
       stepsRemaining: run.config.maxSteps - run.stepsUsed,
       // Credential vault lands in M4 (§9.4); no placeholder names yet.
       placeholders: [],
+      ...(correction !== undefined && { correction }),
     };
   }
 
@@ -639,6 +731,33 @@ export class RunController {
     await this.hideOverlay();
     await this.transition('done', detail);
   }
+}
+
+/** Compact issue list for a correction note, e.g. `type 'click': index: Required`. */
+function formatActionIssues(candidate: unknown, error: import('zod').ZodError): string {
+  const type =
+    candidate !== null && typeof candidate === 'object'
+      ? (candidate as { type?: unknown }).type
+      : undefined;
+  const typeLabel = typeof type === 'string' ? `type '${type}': ` : '';
+  const issues = error.issues
+    .slice(0, 5)
+    .map((issue) => `${issue.path.join('.') || 'action'}: ${issue.message}`)
+    .join('; ');
+  return `${typeLabel}${issues}`;
+}
+
+/**
+ * History records what happened, including invalid model output (§8.5) — the
+ * shared zHistoryEntry tolerates any `{type: string}` shape. Normalize
+ * unusable candidates so the record always carries a type.
+ */
+function normalizeInvalidCandidate(candidate: unknown): Action {
+  const usable =
+    candidate !== null &&
+    typeof candidate === 'object' &&
+    typeof (candidate as { type?: unknown }).type === 'string';
+  return (usable ? candidate : { type: 'invalid_output' }) as Action;
 }
 
 /** Apply §5.4 defaults and the hard cap. */

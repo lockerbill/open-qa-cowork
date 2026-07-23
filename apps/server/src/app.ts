@@ -17,6 +17,7 @@ import { workspacesRouter } from './modules/workspaces/routes.js';
 import { providersRouter } from './modules/providers/routes.js';
 import { projectsRouter, resolveRouter } from './modules/projects/routes.js';
 import { aiTasksRouter } from './modules/ai-tasks/routes.js';
+import { autoRouter } from './modules/auto/routes.js';
 import type { Database } from './db/client.js';
 import { defaultLogger, type Logger } from './logging/logger.js';
 import {
@@ -68,6 +69,10 @@ export function createApp(
     app.use(
       '/api/workspaces/:workspaceId/ai/tasks',
       aiTasksRouter(db, jwtSecret, masterEncryptionKey, logger, allowPrivateLlmHosts),
+    );
+    app.use(
+      '/api/workspaces/:workspaceId/auto',
+      autoRouter(db, jwtSecret, masterEncryptionKey, logger, allowPrivateLlmHosts),
     );
     app.use('/api/workspaces/:workspaceId/projects', projectsRouter(db, jwtSecret));
     app.use('/api/workspaces/:workspaceId/resolve', resolveRouter(db, jwtSecret));

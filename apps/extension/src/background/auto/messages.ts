@@ -38,6 +38,8 @@ export interface BudgetSnapshot {
   maxWallClockMs: number;
   /** Stale-epoch re-observe/re-decide retries (§7.2) — observable for tests. */
   staleEpochRetries: number;
+  /** Correction turns issued (§8.5) — the M3 acceptance metric (§14). */
+  correctionTurns: number;
 }
 
 // --- SW -> content script ---------------------------------------------------
@@ -171,6 +173,8 @@ export interface PersistedAutoRun {
     llmCalls: number;
     startedAt: number;
     staleEpochRetries: number;
+    /** Optional: absent in states persisted by M2 builds. */
+    correctionTurns?: number;
   };
   outcome?: 'pass' | 'fail' | 'blocked';
   reason?: string;

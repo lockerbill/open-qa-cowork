@@ -1,4 +1,10 @@
-import { LLMError, type ChatOptions, type CompleteOptions } from './types.js';
+import {
+  LLMError,
+  type ChatOptions,
+  type ChatToolsOptions,
+  type CompleteOptions,
+  type ToolCallResult,
+} from './types.js';
 
 export interface OpenAICompatParams {
   /** Base URL including the version path, e.g. https://api.openai.com/v1 */
@@ -29,7 +35,11 @@ export interface OpenAICompatParams {
 interface ChatCompletionResponse {
   choices?: {
     finish_reason?: string;
-    message?: { content?: string | null; reasoning_content?: string | null };
+    message?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      tool_calls?: { function?: { name?: string; arguments?: string } }[];
+    };
   }[];
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }
@@ -68,15 +78,14 @@ export async function openAICompatibleCompleteWithUsage(
 }
 
 /**
- * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
- * LM Studio, llama.cpp, vLLM, ...) with a full message history, returning the
- * completion text alongside the provider's token usage. This is the single
- * place the request/parse logic lives; every other helper here wraps it.
+ * POST /chat/completions on any OpenAI-compatible endpoint with shared
+ * auth/timeout/error handling. This is the single place the request logic
+ * lives; the text and tool-call helpers both wrap it.
  */
-export async function openAICompatibleChatWithUsage(
+async function postChatCompletions(
   params: OpenAICompatParams,
-  opts: ChatOptions,
-): Promise<CompletionWithUsage> {
+  body: Record<string, unknown>,
+): Promise<ChatCompletionResponse> {
   if (params.requireApiKey && !params.apiKey) {
     throw new LLMError(`${params.label} API key is not configured`, 503);
   }
@@ -94,12 +103,7 @@ export async function openAICompatibleChatWithUsage(
     res = await fetch(`${params.baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model: params.model,
-        max_tokens: opts.maxTokens ?? 2048,
-        messages: opts.messages,
-        ...params.extraBody,
-      }),
+      body: JSON.stringify(body),
       signal: controller?.signal,
       redirect: params.redirect,
     });
@@ -113,15 +117,36 @@ export async function openAICompatibleChatWithUsage(
   }
 
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new LLMError(`${params.label} API ${res.status}: ${body.slice(0, 300)}`);
+    const errBody = await res.text().catch(() => '');
+    throw new LLMError(`${params.label} API ${res.status}: ${errBody.slice(0, 300)}`);
   }
-  const data = (await res.json()) as ChatCompletionResponse;
-  const choice = data.choices?.[0];
-  const usage: CompletionUsage = {
+  return (await res.json()) as ChatCompletionResponse;
+}
+
+function usageOf(data: ChatCompletionResponse): CompletionUsage {
+  return {
     inputTokens: data.usage?.prompt_tokens ?? null,
     outputTokens: data.usage?.completion_tokens ?? null,
   };
+}
+
+/**
+ * Call any OpenAI-compatible chat completions endpoint (OpenAI itself, Ollama,
+ * LM Studio, llama.cpp, vLLM, ...) with a full message history, returning the
+ * completion text alongside the provider's token usage.
+ */
+export async function openAICompatibleChatWithUsage(
+  params: OpenAICompatParams,
+  opts: ChatOptions,
+): Promise<CompletionWithUsage> {
+  const data = await postChatCompletions(params, {
+    model: params.model,
+    max_tokens: opts.maxTokens ?? 2048,
+    messages: opts.messages,
+    ...params.extraBody,
+  });
+  const choice = data.choices?.[0];
+  const usage = usageOf(data);
   const text = stripThinkTags(choice?.message?.content ?? '');
   if (text) return { text, usage };
 
@@ -163,4 +188,52 @@ export async function openAICompatibleComplete(
 ): Promise<string> {
   const { text } = await openAICompatibleCompleteWithUsage(params, opts);
   return text;
+}
+
+export interface ToolCallsWithUsage {
+  result: ToolCallResult;
+  usage: CompletionUsage;
+}
+
+/**
+ * Tool-calling chat over any OpenAI-compatible endpoint (auto-test-mode-spec
+ * §8.3): registers the tools, forces `tool_choice: 'required'`, and returns
+ * every tool call the provider emitted (callers take the first and warn on
+ * extras). Malformed per-call argument JSON yields `input: null` with the raw
+ * payload kept for recovery parsing.
+ */
+export async function openAICompatibleChatWithTools(
+  params: OpenAICompatParams,
+  opts: ChatToolsOptions,
+): Promise<ToolCallsWithUsage> {
+  const effective = opts.timeoutMs ? { ...params, timeoutMs: opts.timeoutMs } : params;
+  const data = await postChatCompletions(effective, {
+    model: params.model,
+    max_tokens: opts.maxTokens ?? 2048,
+    messages: opts.messages,
+    tools: opts.tools.map((tool) => ({
+      type: 'function',
+      function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
+    })),
+    tool_choice: 'required',
+    ...params.extraBody,
+  });
+  const choice = data.choices?.[0];
+  const toolCalls = (choice?.message?.tool_calls ?? []).flatMap((call) => {
+    const name = call.function?.name;
+    if (!name) return [];
+    const rawArguments = call.function?.arguments ?? '';
+    let input: unknown = null;
+    try {
+      input = rawArguments ? JSON.parse(rawArguments) : {};
+    } catch {
+      input = null;
+    }
+    return [{ name, input, rawArguments }];
+  });
+  const text = stripThinkTags(choice?.message?.content ?? '');
+  return {
+    result: { toolCalls, ...(text ? { text } : {}) },
+    usage: usageOf(data),
+  };
 }

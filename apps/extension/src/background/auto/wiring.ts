@@ -9,7 +9,7 @@
  */
 import type { RunConfig, StepRequest, StepResponse } from '@qa-copilot/shared/auto';
 import { STATE_CHANGED } from '../../shared/messages.js';
-import { getSession, getSettings, newSession, saveSession } from '../../shared/storage.js';
+import { getAuth, getSession, getSettings, newSession, saveSession } from '../../shared/storage.js';
 import { runExclusive } from '../mutex.js';
 import {
   isAutoMessage,
@@ -19,7 +19,7 @@ import {
   type AutoStateMsg,
   type PersistedAutoRun,
 } from './messages.js';
-import { isFinalStatus, RunController } from './run-controller.js';
+import { DeciderValidationError, isFinalStatus, RunController } from './run-controller.js';
 
 const PERSIST_KEY = 'autoRun';
 
@@ -32,16 +32,49 @@ async function readPersistedRun(): Promise<PersistedAutoRun | null> {
   return (stored[PERSIST_KEY] as PersistedAutoRun | undefined) ?? null;
 }
 
-/** POST {baseUrl}/auto/step (§8 contract). E2E points this at the stub decider. */
-async function decide(baseUrl: string, request: StepRequest): Promise<StepResponse> {
-  const base = baseUrl || (await getSettings()).backendUrl;
-  const res = await fetch(`${base.replace(/\/+$/, '')}/auto/step`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(request),
-  });
+/** Shared /auto/step response handling: 422 → correction turn (§8.5). */
+async function readStepResponse(res: Response): Promise<StepResponse> {
+  if (res.status === 422) {
+    const payload = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new DeciderValidationError(payload.detail ?? 'invalid action');
+  }
   if (!res.ok) throw new Error(`decider HTTP ${res.status}`);
   return (await res.json()) as StepResponse;
+}
+
+/**
+ * Decide the next action (§8 contract). With a `deciderBaseUrl` override the
+ * SW POSTs {base}/auto/step unauthenticated — E2E points this at the stub
+ * decider (§13.2). Otherwise it targets the real workspace-scoped endpoint the
+ * same way the extension calls the ai-tasks gateway: bearer token + workspace
+ * path + project/environment context for layered provider resolution.
+ */
+async function decide(baseUrl: string, request: StepRequest): Promise<StepResponse> {
+  if (baseUrl) {
+    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/auto/step`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return readStepResponse(res);
+  }
+
+  const [settings, auth] = await Promise.all([getSettings(), getAuth()]);
+  if (!auth.token || !auth.currentWorkspaceId) {
+    throw new Error('auto mode requires a signed-in workspace (or a deciderBaseUrl override)');
+  }
+  const base = settings.backendUrl.replace(/\/+$/, '');
+  const body = {
+    ...request,
+    ...(auth.currentProjectId ? { projectId: auth.currentProjectId } : {}),
+    ...(auth.currentEnvironmentId ? { environmentId: auth.currentEnvironmentId } : {}),
+  };
+  const res = await fetch(`${base}/api/workspaces/${auth.currentWorkspaceId}/auto/step`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${auth.token}` },
+    body: JSON.stringify(body),
+  });
+  return readStepResponse(res);
 }
 
 async function injectContentScript(tabId: number): Promise<boolean> {
