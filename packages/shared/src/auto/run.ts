@@ -20,6 +20,12 @@ export interface RunConfig {
   /** Origins; first entry = start origin. */
   originAllowlist: string[];
   /**
+   * Per-run destructive-policy override (§5.5): RegExp sources (compiled
+   * case-insensitive by the guard). Strings, not RegExp — RunConfig must
+   * survive chrome messaging and storage.session. Absent → shared defaults.
+   */
+  destructivePatterns?: string[];
+  /**
    * Base URL the service worker POSTs /auto/step against. Defaults to the
    * extension's configured backend; E2E points it at the stub decider (§13.2).
    */
@@ -64,7 +70,7 @@ export interface TraceStep {
   urlAfter: string;
   consoleErrors: string[];
   failedRequests: Observation['failedRequests'];
-  /** Set when the destructive-action policy matched in autonomous mode (§9.3). */
+  /** Set when the destructive-action policy matched (§9.3) — allowed-and-tagged in autonomous, confirmed in confirm mode. */
   destructive?: boolean;
   startedAt: number;
   endedAt: number;

@@ -171,6 +171,13 @@ export interface TestSession {
   evidence: EvidenceItem[];
   consoleErrors: ConsoleEntry[];
   networkFailures: NetworkFailure[];
+  /**
+   * Auto Test Mode: the finalized RunResult of the auto run that wrote this
+   * session, attached at finalize so runs are reviewable after the fact
+   * (auto-test-mode-spec §5.4, §10). Type-only import keeps the main barrel
+   * free of zod for content-script consumers.
+   */
+  autoRunResult?: import('./auto/run.js').RunResult;
 }
 
 // --- Generated artifacts (spec §13.5, §9.8, §9.9) --------------------------

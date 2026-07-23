@@ -10,6 +10,7 @@ import type {
   HistoryEntry,
   Observation,
   RunConfig,
+  RunResult,
   StepRequest,
   StepResponse,
 } from '@qa-copilot/shared/auto';
@@ -86,6 +87,9 @@ interface Harness {
   persisted: PersistedAutoRun[];
   logs: string[];
   requests: StepRequest[];
+  runResults: RunResult[];
+  /** Mutable vault backing readVault (§9.4). */
+  vault: Record<string, string>;
   observe: ReturnType<typeof vi.fn>;
   execute: ReturnType<typeof vi.fn>;
   decide: ReturnType<typeof vi.fn>;
@@ -96,6 +100,11 @@ interface Harness {
   hideOverlay: ReturnType<typeof vi.fn>;
   stopRecording: ReturnType<typeof vi.fn>;
   clock: { t: number };
+  /**
+   * Sleeps ≥ 60 s (the confirmation timeout) are held instead of auto-advanced
+   * so confirm-flow tests control the race; release fires them.
+   */
+  releaseLongSleeps(): void;
   lastState(): AutoStateMsg;
   phases(): RunPhase[];
   waitForStatus(status: string): Promise<AutoStateMsg>;
@@ -106,7 +115,10 @@ function makeHarness(): Harness {
   const persisted: PersistedAutoRun[] = [];
   const logs: string[] = [];
   const requests: StepRequest[] = [];
+  const runResults: RunResult[] = [];
+  const vault: Record<string, string> = {};
   const clock = { t: 0 };
+  const longSleeps: Array<() => void> = [];
 
   const observe = vi.fn(
     async (): Promise<AutoObserveResponse> => ({
@@ -115,7 +127,7 @@ function makeHarness(): Harness {
       elements: [],
     }),
   );
-  const execute = vi.fn(async (): Promise<AutoExecuteResponse> => OK);
+  const execute = vi.fn(async (_action?: Action): Promise<AutoExecuteResponse> => OK);
   const decide = vi.fn(async (_request?: StepRequest): Promise<StepResponse> => ({
     action: FINISH,
   }));
@@ -128,7 +140,7 @@ function makeHarness(): Harness {
 
   const deps: RunControllerDeps = {
     observe: (_tabId, _runId, _sessionId) => observe(),
-    execute: (_tabId, _runId, _epoch, _action) => execute(),
+    execute: (_tabId, _runId, _epoch, action) => execute(action),
     showOverlay: () => showOverlay(),
     hideOverlay: () => hideOverlay(),
     injectContentScript: () => inject(),
@@ -140,6 +152,10 @@ function makeHarness(): Harness {
     waitForTabLoad: () => waitForTabLoad(),
     startRecordingSession: async () => 'session_test',
     stopRecordingSession: () => stopRecording(),
+    readVault: async () => ({ ...vault }),
+    saveRunResult: async (result) => {
+      runResults.push(JSON.parse(JSON.stringify(result)) as RunResult);
+    },
     persist: async (state) => {
       persisted.push(JSON.parse(JSON.stringify(state)) as PersistedAutoRun);
     },
@@ -151,6 +167,12 @@ function makeHarness(): Harness {
     },
     now: () => clock.t,
     sleep: async (ms) => {
+      if (ms >= 60_000) {
+        await new Promise<void>((resolve) => {
+          longSleeps.push(resolve);
+        });
+        return;
+      }
       clock.t += ms;
     },
   };
@@ -163,6 +185,8 @@ function makeHarness(): Harness {
     persisted,
     logs,
     requests,
+    runResults,
+    vault,
     observe,
     execute,
     decide,
@@ -173,6 +197,9 @@ function makeHarness(): Harness {
     hideOverlay,
     stopRecording,
     clock,
+    releaseLongSleeps: () => {
+      for (const release of longSleeps.splice(0)) release();
+    },
     lastState: () => states[states.length - 1]!,
     phases: () => states.map((s) => s.phase),
     waitForStatus: (status) =>
@@ -807,5 +834,282 @@ describe('clampConfig', () => {
     expect(clamped.maxSteps).toBe(60);
     expect(clamped.maxWallClockMs).toBe(10 * 60 * 1000);
     expect(clamped.maxLlmCalls).toBe(70);
+  });
+});
+
+// --- 21.4 loop detection (§9.5) ---------------------------------------------
+
+/** All nudges are HistorySummary lines; collect them from a StepRequest. */
+function nudgeLines(request: StepRequest): string[] {
+  return request.history
+    .filter((item): item is Extract<typeof item, { kind: 'summary' }> => 'kind' in item)
+    .map((item) => item.line)
+    .filter((line) => line.startsWith('note:'));
+}
+
+describe('loop detection (21.4, §9.5)', () => {
+  it('injects the nudge at 3 identical actions and finalizes as action loop at 5', async () => {
+    const h = makeHarness();
+    scriptDecider(h, [CLICK]); // repeats forever
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('stopped_by_budget');
+
+    expect(final.detail).toBe('action loop');
+    expect(final.trace).toHaveLength(5); // partial trace retained
+    // Request for step 4 (after 3 identical recorded steps) carries the nudge…
+    expect(nudgeLines(h.requests[3]!)).toEqual([
+      'note: you have repeated this action 3 times without progress; try a different approach or finish(blocked)',
+    ]);
+    // …and it is injected once, not re-sent on the 5th request.
+    expect(nudgeLines(h.requests[4]!)).toEqual([]);
+    expect(nudgeLines(h.requests[0]!)).toEqual([]);
+  });
+
+  it('distinct actions do not accumulate a streak', async () => {
+    const h = makeHarness();
+    const SCROLL: Action = { type: 'scroll', direction: 'down', amount: 'page' };
+    scriptDecider(h, [CLICK, SCROLL, CLICK, SCROLL, CLICK, SCROLL, FINISH]);
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('finished');
+
+    expect(final.outcome).toBe('pass');
+    for (const request of h.requests) expect(nudgeLines(request)).toEqual([]);
+  });
+
+  it('nudges after 3 consecutive failed results even when the actions differ', async () => {
+    const h = makeHarness();
+    scriptDecider(h, [
+      CLICK,
+      { type: 'click', index: 1, intent: 'second' },
+      { type: 'click', index: 2, intent: 'third' },
+      FINISH,
+    ]);
+    h.execute
+      .mockResolvedValueOnce({ ok: false, reason: 'error', detail: 'boom', settled: true, navigated: false })
+      .mockResolvedValueOnce({ ok: false, reason: 'error', detail: 'boom', settled: true, navigated: false })
+      .mockResolvedValueOnce({ ok: false, reason: 'error', detail: 'boom', settled: true, navigated: false });
+    await h.controller.start(makeConfig(), 1);
+    await h.waitForStatus('finished');
+
+    expect(nudgeLines(h.requests[3]!)).toEqual([
+      'note: your last 3 actions failed; try a different approach or finish(blocked)',
+    ]);
+  });
+});
+
+// --- 22.4 credential vault (§9.4) --------------------------------------------
+
+const SECRET_FIELD = {
+  index: 0,
+  tag: 'input',
+  text: 'Password',
+  attributes: {},
+  states: [],
+  isSecret: true,
+};
+
+describe('credential vault (22.4, §9.4)', () => {
+  it('substitutes the placeholder for execution while every prompt, state, and trace stays tokenized', async () => {
+    const h = makeHarness();
+    h.vault['TEST_USER_PASSWORD'] = 's3cret!';
+    h.observe.mockImplementation(async () => ({
+      ok: true,
+      observation: makeObservation({ epoch: h.observe.mock.calls.length }),
+      elements: [SECRET_FIELD],
+    }));
+    const fill: Action = {
+      type: 'fill',
+      index: 0,
+      value: '{{TEST_USER_PASSWORD}}',
+      intent: 'enter password',
+    };
+    scriptDecider(h, [fill, FINISH]);
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('finished');
+
+    // The page received the real value…
+    expect(h.execute.mock.calls[0]![0]).toEqual({ ...fill, value: 's3cret!' });
+    // …and the StepRequest carried names only.
+    expect(h.requests[0]!.placeholders).toEqual(['TEST_USER_PASSWORD']);
+    // Trace, history, prompts, persisted state, pushed state, RunResult: tokenized.
+    expect(final.trace[0]!.action).toEqual(fill);
+    for (const blob of [h.requests, h.persisted, h.states, h.runResults]) {
+      expect(JSON.stringify(blob)).not.toContain('s3cret!');
+    }
+  });
+
+  it('refuses a literal value on a secret field and records the refusal for the model', async () => {
+    const h = makeHarness();
+    h.observe.mockImplementation(async () => ({
+      ok: true,
+      observation: makeObservation({ epoch: h.observe.mock.calls.length }),
+      elements: [SECRET_FIELD],
+    }));
+    scriptDecider(h, [
+      { type: 'fill', index: 0, value: 'hunter2', intent: 'enter password' },
+      FINISH,
+    ]);
+    await h.controller.start(makeConfig(), 1);
+    const final = await h.waitForStatus('finished');
+
+    expect(final.trace[0]!.result).toBe('refused');
+    expect(final.trace[0]!.resultDetail).toBe('secret fields accept placeholders only');
+    expect(h.execute).toHaveBeenCalledTimes(1); // only the finish
+    // The refusal is model-visible in the next request's history.
+    const historyEntry = h.requests[1]!.history[0]! as HistoryEntry;
+    expect(historyEntry.result).toBe('refused');
+  });
+});
+
+// --- 23.3 confirmation flow (§9.3) -------------------------------------------
+
+const DELETE_BUTTON = {
+  index: 0,
+  tag: 'button',
+  text: 'Delete item',
+  attributes: {},
+  states: [],
+  isSecret: false,
+};
+
+function makeConfirmHarness(): Harness {
+  const h = makeHarness();
+  h.observe.mockImplementation(async () => ({
+    ok: true,
+    observation: makeObservation({ epoch: h.observe.mock.calls.length }),
+    elements: [DELETE_BUTTON],
+  }));
+  return h;
+}
+
+describe('confirmation flow (23.3, §9.3)', () => {
+  it('surfaces the pending action and executes it on approval as confirmed_by_user', async () => {
+    const h = makeConfirmHarness();
+    scriptDecider(h, [CLICK, FINISH]);
+    await h.controller.start(makeConfig({ mode: 'confirm' }), 1);
+
+    const awaiting = await h.waitForStatus('awaiting_confirmation');
+    expect(awaiting.pendingConfirmation).toMatchObject({
+      action: CLICK,
+      elementText: 'Delete item',
+      reason: 'matches destructive pattern: "delete item"',
+    });
+    expect(awaiting.pendingConfirmation!.expiresAt).toBe(
+      awaiting.pendingConfirmation!.requestedAt + 120_000,
+    );
+    expect(h.execute).not.toHaveBeenCalled();
+
+    h.controller.confirm(true);
+    const final = await h.waitForStatus('finished');
+    expect(h.execute).toHaveBeenCalledTimes(2); // click + finish
+    expect(final.trace[0]!.result).toBe('confirmed_by_user');
+    expect(final.trace[0]!.destructive).toBe(true);
+    expect(final.pendingConfirmation).toBeUndefined();
+  });
+
+  it('records rejection with the user note and does not execute', async () => {
+    const h = makeConfirmHarness();
+    scriptDecider(h, [CLICK, FINISH]);
+    await h.controller.start(makeConfig({ mode: 'confirm' }), 1);
+    await h.waitForStatus('awaiting_confirmation');
+
+    h.controller.confirm(false, 'do not delete test data');
+    const final = await h.waitForStatus('finished');
+    expect(final.trace[0]!.result).toBe('rejected_by_user');
+    expect(final.trace[0]!.resultDetail).toBe('rejected: do not delete test data');
+    expect(h.execute).toHaveBeenCalledTimes(1); // only the finish
+    // The rejection consumed a step and is model-visible in history.
+    const historyEntry = h.requests[1]!.history[0]! as HistoryEntry;
+    expect(historyEntry.result).toBe('rejected_by_user');
+  });
+
+  it('treats the 120 s timeout as rejection', async () => {
+    const h = makeConfirmHarness();
+    scriptDecider(h, [CLICK, FINISH]);
+    await h.controller.start(makeConfig({ mode: 'confirm' }), 1);
+    await h.waitForStatus('awaiting_confirmation');
+
+    h.releaseLongSleeps();
+    const final = await h.waitForStatus('finished');
+    expect(final.trace[0]!.result).toBe('rejected_by_user');
+    expect(final.trace[0]!.resultDetail).toBe('confirmation timed out (120s)');
+    expect(h.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('pause during awaiting_confirmation abandons the step without consuming it', async () => {
+    const h = makeConfirmHarness();
+    scriptDecider(h, [CLICK, FINISH]);
+    await h.controller.start(makeConfig({ mode: 'confirm' }), 1);
+    await h.waitForStatus('awaiting_confirmation');
+
+    h.controller.pause('paused_by_user');
+    const paused = await h.waitForStatus('paused');
+    expect(paused.budgets.stepsUsed).toBe(0);
+    expect(paused.pendingConfirmation).toBeUndefined();
+
+    scriptDecider(h, [FINISH]); // resume re-observes and re-decides
+    h.controller.resume();
+    const final = await h.waitForStatus('finished');
+    expect(final.trace).toHaveLength(1);
+    expect(final.trace[0]!.action.type).toBe('finish');
+  });
+
+  it('a verdict with no pending confirmation is logged and ignored', async () => {
+    const h = makeHarness();
+    scriptDecider(h, [FINISH]);
+    await h.controller.start(makeConfig({ mode: 'confirm' }), 1);
+    await h.waitForStatus('finished');
+    h.controller.confirm(true);
+    expect(h.logs.some((l) => l.includes('no pending confirmation'))).toBe(true);
+  });
+});
+
+// --- 24.2 defect & assertion plumbing into RunResult (§5.4) -------------------
+
+describe('RunResult plumbing (24.2, §5.4)', () => {
+  const DEFECT: Action = {
+    type: 'report_defect',
+    severity: 'high',
+    summary: 'save returns 500',
+    expected: 'item saved',
+    actual: 'HTTP 500',
+  };
+  const ASSERT: Action = {
+    type: 'assert',
+    expectation: 'list shows the item',
+    holds: false,
+    evidence: 'list is empty',
+  };
+
+  it('collects defects and assertions into the persisted RunResult on finish', async () => {
+    const h = makeHarness();
+    scriptDecider(h, [DEFECT, ASSERT, FINISH]);
+    await h.controller.start(makeConfig(), 1);
+    await h.waitForStatus('finished');
+
+    expect(h.runResults).toHaveLength(1);
+    const result = h.runResults[0]!;
+    expect(result.status).toBe('finished');
+    expect(result.outcome).toBe('pass');
+    expect(result.sessionId).toBe('session_test');
+    expect(result.trace).toHaveLength(3);
+    expect(result.defects).toEqual([{ ...DEFECT, step: 1 }]);
+    expect(result.assertions).toEqual([{ ...ASSERT, step: 2 }]);
+  });
+
+  it('budget stops still persist the partial defect/assertion data', async () => {
+    const h = makeHarness();
+    const SCROLL: Action = { type: 'scroll', direction: 'down', amount: 'page' };
+    const SCROLL_UP: Action = { type: 'scroll', direction: 'up', amount: 'page' };
+    scriptDecider(h, [DEFECT, SCROLL, SCROLL_UP]);
+    await h.controller.start(makeConfig({ maxSteps: 3 }), 1);
+    await h.waitForStatus('stopped_by_budget');
+
+    expect(h.runResults).toHaveLength(1);
+    const result = h.runResults[0]!;
+    expect(result.status).toBe('stopped_by_budget');
+    expect(result.defects).toEqual([{ ...DEFECT, step: 1 }]);
+    expect(result.assertions).toEqual([]);
+    expect(result.trace).toHaveLength(3);
   });
 });

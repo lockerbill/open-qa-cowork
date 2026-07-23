@@ -89,6 +89,12 @@ test.describe.configure({ mode: 'serial' });
 
 test('scenario 1 — happy path: login → create item → assert → finish(pass); trace, recorder session, and Playwright draft carry the steps with selectors', async () => {
   test.setTimeout(60_000);
+  // The password rides the credential vault (§9.4): the stub decider emits
+  // {{TEST_USER_PASSWORD}}; the SW substitutes the seeded value at execution.
+  await fetch(`${STUB_DECIDER}/captured`, { method: 'DELETE' });
+  await worker.evaluate(() =>
+    chrome.storage.session.set({ autoVault: { TEST_USER_PASSWORD: 'Secret123!' } }),
+  );
   const { page } = await startRun('scenario:happy_path');
   const final = await waitForStatus('finished', 40_000);
 
@@ -106,8 +112,23 @@ test('scenario 1 — happy path: login → create item → assert → finish(pas
   expect(assertStep.action.type).toBe('assert');
   expect(assertStep.action.holds).toBe(true);
 
-  // The flow really ran: the item the decider named is on the page.
+  // The flow really ran: the item the decider named is on the page — which
+  // also proves the vault substituted the real password (login gates on it).
   await expect(page.locator('#items li', { hasText: 'Widget' })).toBeVisible();
+
+  // Secret-absence instrumentation (22.5, §14): the trace stays tokenized and
+  // the secret value appears in NO decider request (what a model would see),
+  // no persisted run state, and (below) no recorder session.
+  const passwordStep = final.trace[1]!;
+  expect(passwordStep.action.value).toBe('{{TEST_USER_PASSWORD}}');
+  expect(JSON.stringify(final)).not.toContain('Secret123!');
+  const capturedBodies = (await (await fetch(`${STUB_DECIDER}/captured`)).json()) as string[];
+  expect(capturedBodies.length).toBeGreaterThanOrEqual(7);
+  for (const body of capturedBodies) expect(body).not.toContain('Secret123!');
+  expect(capturedBodies.some((b) => b.includes('{{TEST_USER_PASSWORD}}'))).toBe(true);
+  expect(capturedBodies[0]).toContain('"placeholders":["TEST_USER_PASSWORD"]');
+  const { autoRun } = await worker.evaluate(() => chrome.storage.session.get('autoRun'));
+  expect(JSON.stringify(autoRun)).not.toContain('Secret123!');
 
   // Recorder session: exactly one source:'auto' event per element action,
   // each with a durable selector candidate (§6.4.9).

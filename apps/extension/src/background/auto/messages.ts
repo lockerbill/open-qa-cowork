@@ -140,6 +140,22 @@ export type AutoFromPanel =
 
 // --- SW -> side panel (pushed on every state transition) ---------------------
 
+/**
+ * The action awaiting side-panel approval (§9.3, §10): pushed with AUTO_STATE
+ * while phase is `awaiting_confirmation` so the panel can render the modal.
+ * `expiresAt` drives the 120 s countdown; the controller treats expiry as
+ * rejection.
+ */
+export interface PendingConfirmation {
+  action: Action;
+  /** Target element's observed text, when the action has one. */
+  elementText?: string;
+  /** Why the guard requested confirmation. */
+  reason: string;
+  requestedAt: number;
+  expiresAt: number;
+}
+
 export interface AutoStateMsg {
   type: 'AUTO_STATE';
   runId: string;
@@ -149,6 +165,8 @@ export interface AutoStateMsg {
   detail?: string;
   trace: TraceStep[];
   budgets: BudgetSnapshot;
+  /** Present while phase is `awaiting_confirmation` (§9.3). */
+  pendingConfirmation?: PendingConfirmation;
   /** Set once the run finalized via a `finish` action. */
   outcome?: 'pass' | 'fail' | 'blocked';
   reason?: string;
@@ -175,6 +193,13 @@ export interface PersistedAutoRun {
     staleEpochRetries: number;
     /** Optional: absent in states persisted by M2 builds. */
     correctionTurns?: number;
+  };
+  /** Loop-detection state (§9.5). Optional: absent in pre-M4 persisted runs. */
+  loop?: {
+    lastActionHash: string | null;
+    actionStreak: number;
+    failStreak: number;
+    pendingNudge?: string;
   };
   outcome?: 'pass' | 'fail' | 'blocked';
   reason?: string;

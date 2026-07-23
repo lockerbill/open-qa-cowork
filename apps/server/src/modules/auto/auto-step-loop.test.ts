@@ -179,6 +179,8 @@ describe('extension loop against the real /auto/step (task 20.1)', () => {
       waitForTabLoad: async () => {},
       startRecordingSession: async () => 'session_integration',
       stopRecordingSession: async () => {},
+      readVault: async () => ({}),
+      saveRunResult: async () => {},
       persist: async (_state: PersistedAutoRun) => {},
       pushState: (state) => {
         states.push(JSON.parse(JSON.stringify(state)) as AutoStateMsg);

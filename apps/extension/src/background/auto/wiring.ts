@@ -7,7 +7,7 @@
  * Everything decision-shaped lives in run-controller.ts (unit-tested); this
  * file is deliberately thin plumbing exercised by the E2E suite.
  */
-import type { RunConfig, StepRequest, StepResponse } from '@qa-copilot/shared/auto';
+import type { RunConfig, RunResult, StepRequest, StepResponse } from '@qa-copilot/shared/auto';
 import { STATE_CHANGED } from '../../shared/messages.js';
 import { getAuth, getSession, getSettings, newSession, saveSession } from '../../shared/storage.js';
 import { runExclusive } from '../mutex.js';
@@ -22,9 +22,31 @@ import {
 import { DeciderValidationError, isFinalStatus, RunController } from './run-controller.js';
 
 const PERSIST_KEY = 'autoRun';
+/**
+ * Credential vault (§9.4): name → value in chrome.storage.session (trusted
+ * contexts only; cleared on browser close). Written directly by the side
+ * panel's credentials editor — values never travel through runtime messages.
+ */
+const VAULT_KEY = 'autoVault';
 
 async function persistRun(state: PersistedAutoRun): Promise<void> {
   await chrome.storage.session.set({ [PERSIST_KEY]: state });
+}
+
+async function readVault(): Promise<Record<string, string>> {
+  const stored = await chrome.storage.session.get(VAULT_KEY);
+  const vault = stored[VAULT_KEY];
+  return vault && typeof vault === 'object' ? (vault as Record<string, string>) : {};
+}
+
+/** Attach the finalized RunResult to its recorder session (§5.4, §10). */
+async function saveRunResult(result: RunResult): Promise<void> {
+  await runExclusive(async () => {
+    const session = await getSession();
+    if (session.id !== result.sessionId) return;
+    session.autoRunResult = result;
+    await saveSession(session);
+  });
 }
 
 async function readPersistedRun(): Promise<PersistedAutoRun | null> {
@@ -168,6 +190,8 @@ function createController(): RunController {
     waitForTabLoad,
     startRecordingSession,
     stopRecordingSession,
+    readVault,
+    saveRunResult,
     persist: persistRun,
     pushState: (state: AutoStateMsg) => {
       chrome.runtime.sendMessage(state).catch(() => {});
@@ -268,6 +292,7 @@ export function initAutoMode(): void {
     pause: () => controller.pause('paused_by_user'),
     resume: () => controller.resume(),
     stop: () => controller.stop(),
+    confirm: (approved: boolean, note?: string) => controller.confirm(approved, note),
     getState: () => controller.getState(),
   };
 }

@@ -10,6 +10,13 @@ const port = Number(process.env.FIXTURE_PORT ?? 5555);
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', 'http://localhost');
+    // Broken endpoint for the auto-playground fixture (auto-test-mode-spec
+    // §13.2, E2E scenario 4): always answers 500.
+    if (url.pathname === '/api/broken') {
+      res.writeHead(500, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ error: 'simulated backend failure' }));
+      return;
+    }
     let path = url.pathname === '/' ? '/spa.html' : url.pathname;
     // SPA fallback: unknown routes serve the app shell.
     if (!path.endsWith('.html')) path = '/spa.html';

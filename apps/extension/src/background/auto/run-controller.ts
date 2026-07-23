@@ -14,22 +14,25 @@
 import type {
   Action,
   HistoryEntry,
+  HistoryItem,
   Observation,
   ObservedElement,
   RunConfig,
+  RunResult,
   RunStatus,
   StepRequest,
   StepResponse,
   TraceStep,
 } from '@qa-copilot/shared/auto';
 import { RUN_DEFAULTS, zAction } from '@qa-copilot/shared/auto';
-import { checkAction, isOriginAllowed } from './guard.js';
+import { checkAction, isOriginAllowed, substituteCredentials } from './guard.js';
 import { compressHistory } from './history.js';
 import type {
   AutoExecuteResponse,
   AutoObserveResponse,
   AutoStateMsg,
   BudgetSnapshot,
+  PendingConfirmation,
   PersistedAutoRun,
   RunPhase,
 } from './messages.js';
@@ -64,6 +67,14 @@ export interface RunControllerDeps {
   /** Start a fresh recorder session for the run's auto events; returns its id. */
   startRecordingSession(tabId: number): Promise<string>;
   stopRecordingSession(tabId: number): Promise<void>;
+  /**
+   * Credential vault (§9.4): name → value from chrome.storage.session. Values
+   * stay inside the SW; only names ever reach a StepRequest, and only the
+   * substituted AUTO_EXECUTE payload carries a real value.
+   */
+  readVault(): Promise<Record<string, string>>;
+  /** Persist the finalized RunResult with the recorder session (§5.4, §10). */
+  saveRunResult(result: RunResult): Promise<void>;
   persist(state: PersistedAutoRun): Promise<void>;
   pushState(state: AutoStateMsg): void;
   log(message: string): void;
@@ -79,6 +90,16 @@ const TAB_LOAD_TIMEOUT_MS = 10_000;
 const MAX_CORRECTIONS_PER_STEP = 2;
 /** One transient-decider-failure retry per step (502/504/network hiccup). */
 const DECIDER_RETRY_BACKOFF_MS = 2000;
+/** Side-panel confirmation window; expiry counts as rejection (§9.3). */
+const CONFIRMATION_TIMEOUT_MS = 120_000;
+/** Loop detection (§9.5): same action hash 3× → nudge, 5× → finalize. */
+const LOOP_NUDGE_AT = 3;
+const LOOP_FINALIZE_AT = 5;
+const FAIL_NUDGE_AT = 3;
+const LOOP_NUDGE =
+  'note: you have repeated this action 3 times without progress; try a different approach or finish(blocked)';
+const FAIL_NUDGE =
+  'note: your last 3 actions failed; try a different approach or finish(blocked)';
 
 const FINAL_STATUSES: readonly RunStatus[] = [
   'finished',
@@ -86,6 +107,15 @@ const FINAL_STATUSES: readonly RunStatus[] = [
   'stopped_by_budget',
   'error',
 ];
+
+/** Rolling loop-detection state (§9.5); persisted so restarts keep counting. */
+interface LoopState {
+  lastActionHash: string | null;
+  actionStreak: number;
+  failStreak: number;
+  /** Injected into the next StepRequest's history as a synthetic note line. */
+  pendingNudge?: string;
+}
 
 interface RunInternal {
   runId: string;
@@ -103,10 +133,16 @@ interface RunInternal {
   startedAt: number;
   staleEpochRetries: number;
   correctionTurns: number;
+  loop: LoopState;
+  /** Set while phase is awaiting_confirmation; mirrored into AUTO_STATE. */
+  pendingConfirmation?: PendingConfirmation;
   finalStatus?: RunStatus;
   outcome?: 'pass' | 'fail' | 'blocked';
   reason?: string;
 }
+
+/** The side-panel verdict the confirmation wait resolves with (§9.3). */
+type ConfirmationOutcome = { approved: boolean; note?: string } | 'timeout' | 'interrupted';
 
 interface ObserveBundle {
   observation: Observation;
@@ -119,6 +155,8 @@ export class RunController {
   private run: RunInternal | null = null;
   private loopRunning = false;
   private resumeWaiter: (() => void) | null = null;
+  /** Pending side-panel confirmation (§9.3); pause/stop interrupt it. */
+  private confirmationWaiter: ((outcome: ConfirmationOutcome) => void) | null = null;
   private pauseRequested: string | null = null;
   private stopRequested: { status: RunStatus; detail?: string } | null = null;
   /** Bumped on every pause→resume cycle; lets runStep abandon a pre-pause decision. */
@@ -153,6 +191,7 @@ export class RunController {
       startedAt: this.deps.now(),
       staleEpochRetries: 0,
       correctionTurns: 0,
+      loop: { lastActionHash: null, actionStreak: 0, failStreak: 0 },
     };
     await this.transition('starting');
     await this.ensureOverlay();
@@ -182,6 +221,9 @@ export class RunController {
   pause(detail: string): void {
     if (!this.isActive() || this.run!.phase === 'paused') return;
     this.pauseRequested = detail;
+    // A pending confirmation cannot outlive the pause: the step is abandoned
+    // (the page may change under the human); resume re-observes (§7.1).
+    this.confirmationWaiter?.('interrupted');
   }
 
   /** Resume always returns to `observing` via the loop top (§7.1). */
@@ -202,6 +244,7 @@ export class RunController {
   stop(): void {
     if (!this.run || this.run.finalStatus) return;
     this.stopRequested = { status: 'stopped_by_user' };
+    this.confirmationWaiter?.('interrupted');
     if (this.resumeWaiter) {
       this.resumeWaiter();
       return;
@@ -215,9 +258,17 @@ export class RunController {
     this.pause('user_intervened');
   }
 
-  /** Confirmation verdicts arrive in M4; the M2 guard never requests one. */
-  confirm(_approved: boolean, _note?: string): void {
-    this.deps.log('auto: AUTO_CONFIRMATION received but confirm mode lands in M4; ignored');
+  /**
+   * Side-panel confirmation verdict (§9.3). Verdicts arriving with no pending
+   * confirmation (already timed out, paused, or a stale panel) are logged and
+   * ignored — stale-runId verdicts never reach here (wiring gates on runId).
+   */
+  confirm(approved: boolean, note?: string): void {
+    if (this.confirmationWaiter) {
+      this.confirmationWaiter({ approved, ...(note !== undefined && { note }) });
+    } else {
+      this.deps.log('auto: AUTO_CONFIRMATION with no pending confirmation; ignored');
+    }
   }
 
   /**
@@ -257,6 +308,7 @@ export class RunController {
       startedAt: persisted.budgets.startedAt,
       staleEpochRetries: persisted.budgets.staleEpochRetries,
       correctionTurns: persisted.budgets.correctionTurns ?? 0,
+      loop: persisted.loop ?? { lastActionHash: null, actionStreak: 0, failStreak: 0 },
     };
     await this.persistAndPush();
   }
@@ -312,6 +364,9 @@ export class RunController {
       ...(run.detail !== undefined && { detail: run.detail }),
       trace: run.trace,
       budgets: this.budgets(run),
+      ...(run.pendingConfirmation !== undefined && {
+        pendingConfirmation: run.pendingConfirmation,
+      }),
       ...(run.outcome !== undefined && { outcome: run.outcome }),
       ...(run.reason !== undefined && { reason: run.reason }),
     };
@@ -336,6 +391,7 @@ export class RunController {
         staleEpochRetries: run.staleEpochRetries,
         correctionTurns: run.correctionTurns,
       },
+      loop: run.loop,
       ...(run.outcome !== undefined && { outcome: run.outcome }),
       ...(run.reason !== undefined && { reason: run.reason }),
     };
@@ -458,23 +514,27 @@ export class RunController {
     }
   }
 
-  /** One step: decide → guard → execute → record (§7.2). */
+  /** One step: decide → guard → (confirm) → execute → record (§7.2, §9.3). */
   private async runStep(initial: ObserveBundle): Promise<'continue' | 'finalized'> {
     const run = this.run!;
     let { observation, elements } = initial;
     const startedAt = this.deps.now();
+    // Vault read once per step (§9.4): names go into the StepRequest and the
+    // guard; values only ever into the substituted AUTO_EXECUTE payload.
+    const vault = await this.deps.readVault().catch(() => ({}) as Record<string, string>);
+    const vaultNames = Object.keys(vault);
 
     // Stale-epoch re-observe/re-decide happens at most once per step and
     // does not consume a step (§7.2).
     for (let attempt = 0; ; attempt++) {
       await this.transition('deciding');
-      const decided = await this.decideWithCorrections(observation);
+      const decided = await this.decideWithCorrections(observation, vaultNames);
       if (decided.kind === 'finalized') return 'finalized';
       if (decided.kind === 'abandoned') return 'continue';
       if (decided.kind === 'invalid') {
         // Correction turns exhausted (§8.5): record the step as failed and
         // continue with a fresh observation on the next loop iteration.
-        await this.recordStep(
+        return this.recordStep(
           decided.candidate,
           'failed',
           'model_output_invalid',
@@ -482,22 +542,54 @@ export class RunController {
           observation,
           startedAt,
         );
-        return 'continue';
       }
       const action = decided.action;
 
       await this.transition('guarding');
-      const verdict = checkAction(action, elements, run.config);
-      if (verdict.verdict !== 'allow') {
-        // M2 has no confirmation flow; a `confirm` verdict cannot occur (§14).
-        await this.recordStep(action, 'refused', verdict.reason, undefined, observation, startedAt);
-        return 'continue';
+      const verdict = checkAction(action, elements, run.config, vaultNames);
+      if (verdict.verdict === 'refuse') {
+        return this.recordStep(action, 'refused', verdict.reason, undefined, observation, startedAt);
+      }
+      const destructive = verdict.destructive === true;
+
+      let confirmedByUser = false;
+      if (verdict.verdict === 'confirm') {
+        const outcome = await this.awaitConfirmation(action, elements, verdict.reason);
+        if (outcome === 'interrupted') {
+          // Pause/stop arrived while awaiting: the step is abandoned without
+          // consuming the counter; resume re-observes (§7.1).
+          return (await this.controlPoint()) ? 'finalized' : 'continue';
+        }
+        if (outcome === 'timeout' || !outcome.approved) {
+          const detail =
+            outcome === 'timeout'
+              ? 'confirmation timed out (120s)'
+              : outcome.note
+                ? `rejected: ${outcome.note}`
+                : 'rejected by user';
+          return this.recordStep(
+            action,
+            'rejected_by_user',
+            detail,
+            undefined,
+            observation,
+            startedAt,
+            { destructive },
+          );
+        }
+        confirmedByUser = true;
       }
 
       await this.transition('executing');
       let result: AutoExecuteResponse;
       try {
-        result = await this.deps.execute(run.tabId, run.runId, observation.epoch, action);
+        result = await this.deps.execute(
+          run.tabId,
+          run.runId,
+          observation.epoch,
+          // Real credential values exist only in this payload (§9.4).
+          substituteCredentials(action, vault),
+        );
       } catch (err) {
         // A hard navigation tears the content script down before it can
         // respond — the channel closes and the ActionResult is lost. Confirm
@@ -529,11 +621,19 @@ export class RunController {
       }
 
       await this.transition('post_step');
-      const resultKind = result.ok ? 'ok' : 'failed';
+      const resultKind = result.ok ? (confirmedByUser ? 'confirmed_by_user' : 'ok') : 'failed';
       const detail = result.ok
         ? undefined
         : [result.reason, result.detail].filter(Boolean).join(': ') || 'failed';
-      await this.recordStep(action, resultKind, detail, result, observation, startedAt);
+      const stepOutcome = await this.recordStep(
+        action,
+        resultKind,
+        detail,
+        result,
+        observation,
+        startedAt,
+        { destructive },
+      );
 
       if (action.type === 'finish') {
         run.outcome = action.outcome;
@@ -541,10 +641,43 @@ export class RunController {
         await this.finalize('finished');
         return 'finalized';
       }
+      if (stepOutcome === 'finalized') return 'finalized';
 
       if (result.navigated) await this.afterNavigation();
       return 'continue';
     }
+  }
+
+  /**
+   * Confirmation wait (§9.3): surface the pending action to the panel, then
+   * race the AUTO_CONFIRMATION verdict against the 120 s timeout. Pause/stop
+   * resolve the wait with 'interrupted'.
+   */
+  private async awaitConfirmation(
+    action: Action,
+    elements: ObservedElement[],
+    reason: string,
+  ): Promise<ConfirmationOutcome> {
+    const run = this.run!;
+    const element =
+      'index' in action ? elements.find((e) => e.index === action.index) : undefined;
+    const requestedAt = this.deps.now();
+    run.pendingConfirmation = {
+      action,
+      ...(element?.text && { elementText: element.text }),
+      reason,
+      requestedAt,
+      expiresAt: requestedAt + CONFIRMATION_TIMEOUT_MS,
+    };
+    await this.transition('awaiting_confirmation', reason);
+
+    const outcome = await new Promise<ConfirmationOutcome>((resolve) => {
+      this.confirmationWaiter = resolve;
+      void this.deps.sleep(CONFIRMATION_TIMEOUT_MS).then(() => resolve('timeout'));
+    });
+    this.confirmationWaiter = null;
+    run.pendingConfirmation = undefined;
+    return outcome;
   }
 
   /**
@@ -556,6 +689,7 @@ export class RunController {
    */
   private async decideWithCorrections(
     observation: Observation,
+    vaultNames: string[],
   ): Promise<
     | { kind: 'action'; action: Action }
     | { kind: 'invalid'; candidate: Action }
@@ -573,7 +707,7 @@ export class RunController {
       try {
         response = await this.deps.decide(
           this.deciderBaseUrl(),
-          this.stepRequest(observation, correction),
+          this.stepRequest(observation, vaultNames, correction),
         );
       } catch (err) {
         if (err instanceof DeciderValidationError) {
@@ -623,7 +757,11 @@ export class RunController {
     }
   }
 
-  /** Append TraceStep + HistoryEntry; every recorded step consumes the counter. */
+  /**
+   * Append TraceStep + HistoryEntry; every recorded step consumes the counter
+   * and feeds loop detection (§9.5). Returns 'finalized' when the same action
+   * hash reached 5× and the run ended as stopped_by_budget ('action loop').
+   */
   private async recordStep(
     action: Action,
     result: HistoryEntry['result'],
@@ -631,7 +769,8 @@ export class RunController {
     exec: AutoExecuteResponse | undefined,
     observation: Observation,
     startedAt: number,
-  ): Promise<void> {
+    opts: { destructive?: boolean } = {},
+  ): Promise<'continue' | 'finalized'> {
     const run = this.run!;
     run.stepsUsed += 1;
     const urlAfter = (await this.deps.getTabUrl(run.tabId).catch(() => null)) ?? observation.url;
@@ -643,6 +782,7 @@ export class RunController {
       ...(resultDetail !== undefined && { resultDetail: resultDetail.slice(0, 200) }),
       ...(exec?.durableSelector !== undefined && { durableSelector: exec.durableSelector }),
       ...(exec?.elementText !== undefined && { elementText: exec.elementText }),
+      ...(opts.destructive === true && { destructive: true }),
       urlBefore: observation.url,
       urlAfter,
       consoleErrors: [],
@@ -658,7 +798,29 @@ export class RunController {
       urlAfter,
       newErrors: 0,
     });
+
+    // Loop detection (§9.5). `finish` finalizes anyway and never loops.
+    const loop = run.loop;
+    loop.pendingNudge = undefined;
+    if (action.type !== 'finish') {
+      const hash = actionHash(action, urlAfter);
+      if (hash === loop.lastActionHash) {
+        loop.actionStreak += 1;
+      } else {
+        loop.lastActionHash = hash;
+        loop.actionStreak = 1;
+      }
+      loop.failStreak = result === 'failed' ? loop.failStreak + 1 : 0;
+      if (loop.actionStreak >= LOOP_FINALIZE_AT) {
+        await this.finalize('stopped_by_budget', 'action loop');
+        return 'finalized';
+      }
+      if (loop.actionStreak === LOOP_NUDGE_AT) loop.pendingNudge = LOOP_NUDGE;
+      else if (loop.failStreak === FAIL_NUDGE_AT) loop.pendingNudge = FAIL_NUDGE;
+    }
+
     await this.persistAndPush();
+    return 'continue';
   }
 
   /** Console/network evidence for step N arrives with observation N+1 (§6.5). */
@@ -673,18 +835,34 @@ export class RunController {
     if (lastHistory) lastHistory.newErrors = observation.consoleErrors.length;
   }
 
-  private stepRequest(observation: Observation, correction?: string): StepRequest {
+  private stepRequest(
+    observation: Observation,
+    vaultNames: string[],
+    correction?: string,
+  ): StepRequest {
     const run = this.run!;
+    // Deterministic compression (§7.5): >20 entries → last 12 verbatim +
+    // one synthetic line per 5 older steps.
+    const history: HistoryItem[] = compressHistory(run.history);
+    // Loop-detection nudge (§9.5): injected as a synthetic note line for the
+    // step(s) following the streak; correction turns re-send it unchanged.
+    if (run.loop.pendingNudge) {
+      const lastStep = run.history[run.history.length - 1]?.step ?? 0;
+      history.push({
+        kind: 'summary',
+        fromStep: lastStep,
+        toStep: lastStep,
+        line: run.loop.pendingNudge,
+      });
+    }
     return {
       goal: run.goal,
       mode: run.config.mode,
-      // Deterministic compression (§7.5): >20 entries → last 12 verbatim +
-      // one synthetic line per 5 older steps.
-      history: compressHistory(run.history),
+      history,
       observation,
       stepsRemaining: run.config.maxSteps - run.stepsUsed,
-      // Credential vault lands in M4 (§9.4); no placeholder names yet.
-      placeholders: [],
+      // Names only — values never leave the SW (§9.4).
+      placeholders: vaultNames,
       ...(correction !== undefined && { correction }),
     };
   }
@@ -728,9 +906,66 @@ export class RunController {
     await this.transition('finalizing', detail);
     run.finalStatus = status;
     await this.deps.stopRecordingSession(run.tabId).catch(() => {});
+    // Defect & assertion plumbing (§5.4): the RunResult persists with the
+    // recorder session so runs are reviewable after the fact (§10). Partial
+    // runs (budget stops, errors) keep whatever the trace collected.
+    await this.deps.saveRunResult(buildRunResult(run, status)).catch(() => {});
     await this.hideOverlay();
     await this.transition('done', detail);
   }
+}
+
+/** Derive the persisted RunResult from the trace (§5.4). */
+function buildRunResult(run: RunInternal, status: RunStatus): RunResult {
+  const defects: RunResult['defects'] = [];
+  const assertions: RunResult['assertions'] = [];
+  for (const step of run.trace) {
+    if (step.result !== 'ok' && step.result !== 'confirmed_by_user') continue;
+    if (step.action.type === 'report_defect') defects.push({ ...step.action, step: step.step });
+    if (step.action.type === 'assert') assertions.push({ ...step.action, step: step.step });
+  }
+  return {
+    status,
+    ...(run.outcome !== undefined && { outcome: run.outcome }),
+    ...(run.reason !== undefined && { reason: run.reason }),
+    trace: run.trace,
+    defects,
+    assertions,
+    sessionId: run.sessionId,
+  };
+}
+
+/**
+ * Rolling loop-detection hash (§9.5): (urlAfter, action.type, index?, salient
+ * value). Direction/key/url are the "value" for non-element actions so paging
+ * through a long document (down, down, …) counts as repetition only when
+ * genuinely identical.
+ */
+function actionHash(action: Action, urlAfter: string): string {
+  const index = 'index' in action ? action.index : null;
+  const value = (() => {
+    switch (action.type) {
+      case 'fill':
+        return action.value;
+      case 'select':
+        return action.option;
+      case 'press':
+        return action.key;
+      case 'scroll':
+        return `${action.direction}:${action.amount}`;
+      case 'navigate':
+        return action.url;
+      case 'wait':
+        return String(action.seconds);
+      case 'assert':
+        return action.expectation;
+      case 'report_defect':
+        return action.summary;
+      default:
+        return null;
+    }
+  })();
+  return JSON.stringify([urlAfter, action.type, index, value]);
 }
 
 /** Compact issue list for a correction note, e.g. `type 'click': index: Required`. */
