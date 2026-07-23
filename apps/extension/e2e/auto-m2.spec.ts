@@ -237,3 +237,24 @@ test('scenario 9 — kill switch: trusted keypress pauses the run; overlay Stop 
 
   await page.close();
 });
+
+test('reset() force-recovers a wedged controller so the next run can start (eval-harness last resort)', async () => {
+  test.setTimeout(60_000);
+  const { page } = await startRun('scenario:kill_switch');
+  await waitForStatus('running', 20_000);
+
+  // Force-reset while the run is live: state and the persisted record clear…
+  await worker.evaluate(() => (globalThis as any).__openqaAuto.reset());
+  expect(await getState()).toBeNull();
+  const { autoRun } = await worker.evaluate(() => chrome.storage.session.get('autoRun'));
+  expect(autoRun).toBeUndefined();
+
+  // …and a new run starts immediately — no 'an auto run is already active'.
+  const second = await startRun('scenario:budget', { maxSteps: 2 });
+  const final = await waitForStatus('stopped_by_budget', 30_000);
+  expect(final.runId).toBe(second.runId);
+  expect(final.detail).toBe('max steps reached');
+
+  await page.close();
+  await second.page.close();
+});

@@ -1162,3 +1162,98 @@ describe('per-run metrics (28.1, §12)', () => {
     expect(h.runResults[0]!.metrics).toMatchObject({ steps: 3, llmCalls: 3, refusals: 0 });
   });
 });
+
+// --- run lifecycle hardening (eval-harness incident follow-up) ----------------
+
+describe('run lifecycle hardening', () => {
+  it('stop() during a hung decide finalizes stopped_by_user once the call rejects, without a retry', async () => {
+    const h = makeHarness();
+    let rejectDecide!: (err: Error) => void;
+    h.decide.mockImplementationOnce(
+      () =>
+        new Promise<StepResponse>((_resolve, reject) => {
+          rejectDecide = reject;
+        }),
+    );
+    await h.controller.start(makeConfig(), 1);
+    await vi.waitFor(() => expect(h.decide).toHaveBeenCalled());
+
+    h.controller.stop();
+    rejectDecide(new Error('decider request timed out after 120000ms'));
+    const final = await h.waitForStatus('stopped_by_user');
+    expect(final.phase).toBe('done');
+    // The pending stop preempts the transport retry: one decide call only.
+    expect(h.decide).toHaveBeenCalledTimes(1);
+    expect(h.runResults[0]!.status).toBe('stopped_by_user');
+  });
+
+  it('tabClosed ends an active run as error (tab closed)', async () => {
+    const h = makeHarness();
+    let releaseDecide!: () => void;
+    h.decide.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releaseDecide = resolve;
+      });
+      return { action: CLICK };
+    });
+    await h.controller.start(makeConfig(), 1);
+    await vi.waitFor(() => expect(h.decide).toHaveBeenCalled());
+
+    h.controller.tabClosed(1);
+    releaseDecide();
+    const final = await h.waitForStatus('error');
+    expect(final.detail).toBe('tab closed');
+    expect(h.stopRecording).toHaveBeenCalled();
+  });
+
+  it('tabClosed for another tab is a no-op', async () => {
+    const h = makeHarness();
+    scriptDecider(h, [FINISH]);
+    await h.controller.start(makeConfig(), 1);
+    h.controller.tabClosed(99);
+    const final = await h.waitForStatus('finished');
+    expect(final.status).toBe('finished');
+  });
+
+  it('tabClosed finalizes a paused restored (loop-less) run inline', async () => {
+    const h = makeHarness();
+    scriptDecider(h, [CLICK, FINISH]);
+    await h.controller.start(makeConfig(), 1);
+    await h.waitForStatus('finished');
+    const midRun = h.persisted.find((p) => p.status === 'running')!;
+
+    // Restored-as-paused run whose tab closes: previously nothing ever
+    // finalized it and it blocked new runs for the browser-session lifetime.
+    const fresh = makeHarness();
+    await fresh.controller.restore(midRun);
+    fresh.controller.tabClosed(midRun.tabId);
+    const final = await fresh.waitForStatus('error');
+    expect(final.detail).toBe('tab closed');
+    expect(fresh.stopRecording).toHaveBeenCalled();
+  });
+
+  it('tabClosed during awaiting_confirmation unblocks the wait and finalizes', async () => {
+    const h = makeConfirmHarness();
+    scriptDecider(h, [CLICK, FINISH]);
+    await h.controller.start(makeConfig({ mode: 'confirm' }), 1);
+    await h.waitForStatus('awaiting_confirmation');
+
+    h.controller.tabClosed(1);
+    const final = await h.waitForStatus('error');
+    expect(final.detail).toBe('tab closed');
+    expect(h.execute).not.toHaveBeenCalled();
+  });
+
+  it('never persists a non-final status once finalizing begins (SW-suspension safety)', async () => {
+    const h = makeHarness();
+    scriptDecider(h, [FINISH]);
+    await h.controller.start(makeConfig(), 1);
+    await h.waitForStatus('finished');
+
+    // A SW suspension between the finalizing persist and the final-status
+    // write must not resurrect the run as paused on the next wake.
+    const finalizing = h.persisted.filter((p) => p.phase === 'finalizing');
+    expect(finalizing.length).toBeGreaterThan(0);
+    for (const record of finalizing) expect(record.status).toBe('finished');
+  });
+});

@@ -259,6 +259,24 @@ export class RunController {
   }
 
   /**
+   * The tab hosting the run was closed (wiring: tabs.onRemoved). The run can
+   * never continue — end it as an error like the other unreachable-tab paths,
+   * instead of leaving it active forever (a paused run had no timeout that
+   * would ever finalize it, blocking every new start()).
+   */
+  tabClosed(tabId: number): void {
+    if (!this.run || this.run.finalStatus || this.run.tabId !== tabId) return;
+    this.stopRequested = { status: 'error', detail: 'tab closed' };
+    this.confirmationWaiter?.('interrupted');
+    if (this.resumeWaiter) {
+      this.resumeWaiter();
+      return;
+    }
+    // Paused restored run with no loop: finalize inline.
+    if (!this.loopRunning) void this.finalize('error', 'tab closed');
+  }
+
+  /**
    * Side-panel confirmation verdict (§9.3). Verdicts arriving with no pending
    * confirmation (already timed out, paused, or a stale panel) are logged and
    * ignored — stale-runId verdicts never reach here (wiring gates on runId).
@@ -903,8 +921,11 @@ export class RunController {
   private async finalize(status: RunStatus, detail?: string): Promise<void> {
     const run = this.run;
     if (!run || run.finalStatus) return;
-    await this.transition('finalizing', detail);
+    // Final status is assigned BEFORE the finalizing transition persists: a
+    // SW suspension inside this method must never leave a `running` record
+    // that the next wake would resurrect as paused (§7.1).
     run.finalStatus = status;
+    await this.transition('finalizing', detail);
     await this.deps.stopRecordingSession(run.tabId).catch(() => {});
     // Defect & assertion plumbing (§5.4): the RunResult persists with the
     // recorder session so runs are reviewable after the fact (§10). Partial

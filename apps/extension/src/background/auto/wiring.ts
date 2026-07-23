@@ -7,10 +7,11 @@
  * Everything decision-shaped lives in run-controller.ts (unit-tested); this
  * file is deliberately thin plumbing exercised by the E2E suite.
  */
-import type { RunConfig, RunResult, StepRequest, StepResponse } from '@qa-copilot/shared/auto';
+import type { RunConfig, RunResult } from '@qa-copilot/shared/auto';
 import { STATE_CHANGED } from '../../shared/messages.js';
-import { getAuth, getSession, getSettings, newSession, saveSession } from '../../shared/storage.js';
+import { getSession, getSettings, newSession, saveSession } from '../../shared/storage.js';
 import { runExclusive } from '../mutex.js';
+import { decide } from './decide.js';
 import {
   isAutoMessage,
   type AutoExecuteResponse,
@@ -19,7 +20,7 @@ import {
   type AutoStateMsg,
   type PersistedAutoRun,
 } from './messages.js';
-import { DeciderValidationError, isFinalStatus, RunController } from './run-controller.js';
+import { isFinalStatus, RunController } from './run-controller.js';
 
 const PERSIST_KEY = 'autoRun';
 /**
@@ -54,51 +55,6 @@ async function saveRunResult(result: RunResult): Promise<void> {
 async function readPersistedRun(): Promise<PersistedAutoRun | null> {
   const stored = await chrome.storage.session.get(PERSIST_KEY);
   return (stored[PERSIST_KEY] as PersistedAutoRun | undefined) ?? null;
-}
-
-/** Shared /auto/step response handling: 422 → correction turn (§8.5). */
-async function readStepResponse(res: Response): Promise<StepResponse> {
-  if (res.status === 422) {
-    const payload = (await res.json().catch(() => ({}))) as { detail?: string };
-    throw new DeciderValidationError(payload.detail ?? 'invalid action');
-  }
-  if (!res.ok) throw new Error(`decider HTTP ${res.status}`);
-  return (await res.json()) as StepResponse;
-}
-
-/**
- * Decide the next action (§8 contract). With a `deciderBaseUrl` override the
- * SW POSTs {base}/auto/step unauthenticated — E2E points this at the stub
- * decider (§13.2). Otherwise it targets the real workspace-scoped endpoint the
- * same way the extension calls the ai-tasks gateway: bearer token + workspace
- * path + project/environment context for layered provider resolution.
- */
-async function decide(baseUrl: string, request: StepRequest): Promise<StepResponse> {
-  if (baseUrl) {
-    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/auto/step`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-    return readStepResponse(res);
-  }
-
-  const [settings, auth] = await Promise.all([getSettings(), getAuth()]);
-  if (!auth.token || !auth.currentWorkspaceId) {
-    throw new Error('auto mode requires a signed-in workspace (or a deciderBaseUrl override)');
-  }
-  const base = settings.backendUrl.replace(/\/+$/, '');
-  const body = {
-    ...request,
-    ...(auth.currentProjectId ? { projectId: auth.currentProjectId } : {}),
-    ...(auth.currentEnvironmentId ? { environmentId: auth.currentEnvironmentId } : {}),
-  };
-  const res = await fetch(`${base}/api/workspaces/${auth.currentWorkspaceId}/auto/step`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${auth.token}` },
-    body: JSON.stringify(body),
-  });
-  return readStepResponse(res);
 }
 
 async function injectContentScript(tabId: number): Promise<boolean> {
@@ -166,7 +122,10 @@ async function stopRecordingSession(tabId: number): Promise<void> {
 }
 
 function createController(): RunController {
-  return new RunController({
+  // Once replaced (a later run, or a force-reset of a wedged run), a stale
+  // controller unblocking mid-finalize must not rewrite the persisted run or
+  // repaint the panel — its persist/pushState turn into no-ops.
+  const c: RunController = new RunController({
     observe: async (tabId, runId, sessionId) =>
       (await chrome.tabs.sendMessage(tabId, {
         type: 'AUTO_OBSERVE',
@@ -194,14 +153,15 @@ function createController(): RunController {
     stopRecordingSession,
     readVault,
     saveRunResult,
-    persist: persistRun,
+    persist: (state) => (controller === c ? persistRun(state) : Promise.resolve()),
     pushState: (state: AutoStateMsg) => {
-      chrome.runtime.sendMessage(state).catch(() => {});
+      if (controller === c) chrome.runtime.sendMessage(state).catch(() => {});
     },
     log: (message) => console.debug('[QA Copilot]', message),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
+  return c;
 }
 
 let controller = createController();
@@ -275,7 +235,13 @@ export { isAutoMessage };
  */
 export async function restorePersistedRunOnWake(): Promise<void> {
   const persisted = await readPersistedRun().catch(() => null);
-  if (!persisted || isFinalStatus(persisted.status)) return;
+  if (!persisted) return;
+  if (isFinalStatus(persisted.status)) {
+    // A finished run's record only serves the same-SW-lifetime panel
+    // fallback; clear it on wake so stale records don't linger all session.
+    await chrome.storage.session.remove(PERSIST_KEY).catch(() => {});
+    return;
+  }
   if (controller.isActive()) return; // same SW lifetime, run still live
   await controller.restore(persisted);
 }
@@ -285,6 +251,9 @@ export function initAutoMode(): void {
   chrome.webNavigation?.onCommitted.addListener((details) => {
     if (details.frameId === 0) controller.handleNavigationCommitted(details.tabId, details.url);
   });
+  // A closed run tab can never be observed again — end the run instead of
+  // leaving it active (a paused run had nothing else to finalize it).
+  chrome.tabs.onRemoved.addListener((tabId) => controller.tabClosed(tabId));
   void restorePersistedRunOnWake();
 
   // E2E/dev surface: lets Playwright drive runs from the SW context without
@@ -296,5 +265,15 @@ export function initAutoMode(): void {
     stop: () => controller.stop(),
     confirm: (approved: boolean, note?: string) => controller.confirm(approved, note),
     getState: () => controller.getState(),
+    /**
+     * E2E/eval recovery: force-replace a wedged controller so one stuck run
+     * can never poison subsequent runs, and clear the persisted record so the
+     * AUTO_GET_STATE fallback and the next SW wake don't resurrect it.
+     */
+    reset: async () => {
+      controller.stop(); // best effort — honored if the old loop ever unblocks
+      controller = createController();
+      await chrome.storage.session.remove(PERSIST_KEY);
+    },
   };
 }

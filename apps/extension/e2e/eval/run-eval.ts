@@ -15,15 +15,28 @@
  *   3. Real API server running with platform env (DATABASE_URL, JWT_SECRET,
  *      MASTER_ENCRYPTION_KEY; plus ALLOW_PRIVATE_LLM_HOSTS=true for a local
  *      provider):                  pnpm --filter @qa-copilot/server dev
+ *      (Not needed in smoke mode — see EVAL_DECIDER_URL.)
  *
  * Environment:
- *   EVAL_PROVIDER_BASE_URL  (required) e.g. https://openrouter.ai/api/v1
- *   EVAL_PROVIDER_MODEL     (required) e.g. tencent/hy3
+ *   EVAL_PROVIDER_BASE_URL  (required*) e.g. https://openrouter.ai/api/v1
+ *   EVAL_PROVIDER_MODEL     (required*) e.g. tencent/hy3
  *   EVAL_PROVIDER_API_KEY   (default 'not-needed' — fine for local servers)
  *   EVAL_SERVER_URL         (default http://localhost:8787)
  *   EVAL_FIXTURE_URL        (default http://localhost:5555/eval-buggy.html)
  *   EVAL_RUNS               (default 3)
  *   EVAL_MAX_STEPS          (default 20)
+ *   EVAL_RUN_TIMEOUT_MS     (default 20 min) harness deadline per run; the
+ *                           controller's own wall-clock budget is derived
+ *                           from it so healthy-but-slow runs stop as
+ *                           stopped_by_budget, not harness_error
+ *   EVAL_STOP_GRACE_MS      (default 30 s) wait for a stopped run to
+ *                           finalize before force-resetting the controller
+ *   EVAL_DECIDER_URL        smoke mode: POST the stub decider (e2e/
+ *                           stub-decider.ts, :5557) directly — no API
+ *                           server, no provider, no credits (*provider
+ *                           envs become optional)
+ *   EVAL_GOAL               override the run goal (smoke mode uses the
+ *                           stub's `scenario:<name>` selection)
  *
  * Usage: pnpm exec tsx e2e/eval/run-eval.ts
  */
@@ -44,15 +57,27 @@ const FIXTURE_URL = process.env.EVAL_FIXTURE_URL ?? 'http://localhost:5555/eval-
 const PROVIDER_BASE_URL = process.env.EVAL_PROVIDER_BASE_URL;
 const PROVIDER_MODEL = process.env.EVAL_PROVIDER_MODEL;
 const PROVIDER_API_KEY = process.env.EVAL_PROVIDER_API_KEY ?? 'not-needed';
+const DECIDER_URL = process.env.EVAL_DECIDER_URL;
 const RUNS = Number(process.env.EVAL_RUNS ?? 3);
 const MAX_STEPS = Number(process.env.EVAL_MAX_STEPS ?? 20);
 const RUN_TIMEOUT_MS = Number(process.env.EVAL_RUN_TIMEOUT_MS ?? 20 * 60_000);
+const STOP_GRACE_MS = Number(process.env.EVAL_STOP_GRACE_MS ?? 30_000);
+/**
+ * Controller wall-clock budget: the harness deadline minus headroom for one
+ * worst-case in-flight step (decide 120 s + one retry + execute/settle —
+ * budgets are only checked between steps), so slow-but-healthy runs end as
+ * stopped_by_budget (a real, scoreable status with metrics) instead of
+ * harness_error. The 60 s floor means tiny smoke-run timeouts intentionally
+ * hit the harness deadline (+ ensureRunEnded) instead.
+ */
+const RUN_WALL_CLOCK_MS = Math.max(60_000, RUN_TIMEOUT_MS - 5 * 60_000);
 
 const GOAL =
+  process.env.EVAL_GOAL ??
   'Exploratory-test this TaskTrack page and report every bug you find. Try every button, ' +
-  'form, link, and control, including edge cases. Verify behavior with assert, call ' +
-  'report_defect exactly once per distinct bug, and finish with your verdict once the page ' +
-  'is fully covered.';
+    'form, link, and control, including edge cases. Verify behavior with assert, call ' +
+    'report_defect exactly once per distinct bug, and finish with your verdict once the page ' +
+    'is fully covered.';
 
 interface SeededBug {
   id: string;
@@ -71,6 +96,8 @@ interface RunScore {
   run: number;
   status: string;
   outcome?: string;
+  /** Present on harness_error rows: what killed the run. */
+  error?: string;
   stepsUsed: number;
   llmCalls: number;
   correctionTurns: number;
@@ -88,6 +115,16 @@ interface AutoState {
 
 const FINAL = new Set(['finished', 'stopped_by_user', 'stopped_by_budget', 'error']);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Thrown out of runOnce so the catch path can score the run's real progress. */
+class HarnessRunError extends Error {
+  constructor(
+    message: string,
+    readonly lastState: AutoState | null,
+  ) {
+    super(message);
+  }
+}
 
 async function api<T>(path: string, body?: unknown, token?: string): Promise<T> {
   const res = await fetch(`${SERVER_URL}${path}`, {
@@ -135,6 +172,32 @@ function matchBugs(defect: Defect, bugs: SeededBug[]): string[] {
   return bugs.filter((bug) => bug.keywords.some((k) => text.includes(k.toLowerCase()))).map((b) => b.id);
 }
 
+const getAutoState = async (worker: Worker): Promise<AutoState | null> =>
+  (await worker.evaluate(() => (globalThis as any).__openqaAuto.getState())) as AutoState | null;
+
+/**
+ * Every exit path of a run ends here: stop the run and WAIT for it to reach a
+ * final status before the next run starts — a run left active makes every
+ * later start() throw 'an auto run is already active'. A run that will not
+ * finalize within the grace window (e.g. wedged mid-await) is force-reset as
+ * a last resort.
+ */
+async function ensureRunEnded(worker: Worker): Promise<void> {
+  let state = await getAutoState(worker);
+  if (!state || FINAL.has(state.status)) return;
+  await worker.evaluate(() => (globalThis as any).__openqaAuto.stop());
+  const grace = Date.now() + STOP_GRACE_MS;
+  while (Date.now() < grace) {
+    state = await getAutoState(worker);
+    if (!state || FINAL.has(state.status)) return;
+    await sleep(500);
+  }
+  console.warn(
+    `  run did not finalize within ${STOP_GRACE_MS}ms of stop; force-resetting the controller`,
+  );
+  await worker.evaluate(() => (globalThis as any).__openqaAuto.reset());
+}
+
 async function runOnce(
   context: BrowserContext,
   worker: Worker,
@@ -142,70 +205,92 @@ async function runOnce(
   bugs: SeededBug[],
 ): Promise<RunScore> {
   const page = await context.newPage();
-  await page.goto(FIXTURE_URL);
-  const [tab] = await worker.evaluate(() => chrome.tabs.query({ active: true }));
-  const tabId = tab!.id!;
-
-  await worker.evaluate(
-    ([goal, tabId, maxSteps, origin]) =>
-      (globalThis as any).__openqaAuto.start(
-        {
-          goal,
-          mode: 'autonomous',
-          maxSteps,
-          maxWallClockMs: 15 * 60_000,
-          maxLlmCalls: (maxSteps as number) + 10,
-          originAllowlist: [origin],
-        },
-        tabId,
-      ),
-    [GOAL, tabId, MAX_STEPS, new URL(FIXTURE_URL).origin] as const,
-  );
-
-  const deadline = Date.now() + RUN_TIMEOUT_MS;
   let state: AutoState | null = null;
-  for (;;) {
-    state = (await worker.evaluate(() =>
-      (globalThis as any).__openqaAuto.getState(),
-    )) as AutoState | null;
-    if (state && FINAL.has(state.status)) break;
-    if (Date.now() > deadline) {
-      await worker.evaluate(() => (globalThis as any).__openqaAuto.stop());
-      throw new Error(`run ${run} timed out after ${RUN_TIMEOUT_MS}ms (status ${state?.status})`);
+  try {
+    await page.goto(FIXTURE_URL);
+    const [tab] = await worker.evaluate(() => chrome.tabs.query({ active: true }));
+    const tabId = tab!.id!;
+
+    await worker.evaluate(
+      ([goal, tabId, maxSteps, maxWallClockMs, origin, deciderBaseUrl]) =>
+        (globalThis as any).__openqaAuto.start(
+          {
+            goal,
+            mode: 'autonomous',
+            maxSteps,
+            maxWallClockMs,
+            maxLlmCalls: (maxSteps as number) + 10,
+            originAllowlist: [origin],
+            ...(deciderBaseUrl ? { deciderBaseUrl } : {}),
+          },
+          tabId,
+        ),
+      [
+        GOAL,
+        tabId,
+        MAX_STEPS,
+        RUN_WALL_CLOCK_MS,
+        new URL(FIXTURE_URL).origin,
+        DECIDER_URL ?? '',
+      ] as const,
+    );
+
+    const deadline = Date.now() + RUN_TIMEOUT_MS;
+    for (;;) {
+      state = await getAutoState(worker);
+      if (state && FINAL.has(state.status)) break;
+      if (Date.now() > deadline) {
+        throw new HarnessRunError(
+          `run ${run} timed out after ${RUN_TIMEOUT_MS}ms (status ${state?.status})`,
+          state,
+        );
+      }
+      await sleep(1000);
     }
-    await sleep(1000);
+
+    // Defects from the persisted RunResult (§5.4); fall back to the trace.
+    const stored = (await worker.evaluate(() => chrome.storage.local.get('session'))) as {
+      session?: { autoRunResult?: { defects?: Defect[] } };
+    };
+    const defects: Defect[] =
+      stored.session?.autoRunResult?.defects ??
+      state!.trace
+        .filter((s) => s.action.type === 'report_defect' && s.result === 'ok')
+        .map((s) => s.action);
+
+    const bugsFound = [...new Set(defects.flatMap((d) => matchBugs(d, bugs)))];
+    const falseDefects = defects.filter((d) => matchBugs(d, bugs).length === 0).length;
+
+    return {
+      run,
+      status: state!.status,
+      outcome: state!.outcome,
+      stepsUsed: state!.budgets.stepsUsed,
+      llmCalls: state!.budgets.llmCalls,
+      correctionTurns: state!.budgets.correctionTurns ?? 0,
+      defects,
+      bugsFound,
+      falseDefects,
+    };
+  } catch (err) {
+    // The last polled state rides the error: by the time the caller's catch
+    // runs, the finally below may have stopped/reset the controller, so a
+    // fresh poll would read nothing.
+    throw err instanceof HarnessRunError
+      ? err
+      : new HarnessRunError(err instanceof Error ? err.message : String(err), state);
+  } finally {
+    await ensureRunEnded(worker).catch(() => {});
+    await page.close().catch(() => {});
   }
-  await page.close();
-
-  // Defects from the persisted RunResult (§5.4); fall back to the trace.
-  const stored = (await worker.evaluate(() => chrome.storage.local.get('session'))) as {
-    session?: { autoRunResult?: { defects?: Defect[] } };
-  };
-  const defects: Defect[] =
-    stored.session?.autoRunResult?.defects ??
-    state!.trace
-      .filter((s) => s.action.type === 'report_defect' && s.result === 'ok')
-      .map((s) => s.action);
-
-  const bugsFound = [...new Set(defects.flatMap((d) => matchBugs(d, bugs)))];
-  const falseDefects = defects.filter((d) => matchBugs(d, bugs).length === 0).length;
-
-  return {
-    run,
-    status: state!.status,
-    outcome: state!.outcome,
-    stepsUsed: state!.budgets.stepsUsed,
-    llmCalls: state!.budgets.llmCalls,
-    correctionTurns: state!.budgets.correctionTurns ?? 0,
-    defects,
-    bugsFound,
-    falseDefects,
-  };
 }
 
 async function main(): Promise<void> {
-  if (!PROVIDER_BASE_URL || !PROVIDER_MODEL) {
-    console.error('Set EVAL_PROVIDER_BASE_URL and EVAL_PROVIDER_MODEL (see the script header).');
+  if (!DECIDER_URL && (!PROVIDER_BASE_URL || !PROVIDER_MODEL)) {
+    console.error(
+      'Set EVAL_PROVIDER_BASE_URL and EVAL_PROVIDER_MODEL (see the script header), ' +
+        'or EVAL_DECIDER_URL for a stub-decider smoke run.',
+    );
     process.exit(2);
   }
 
@@ -217,14 +302,18 @@ async function main(): Promise<void> {
     .digest('hex')
     .slice(0, 12);
 
-  console.log(`server:   ${SERVER_URL}`);
+  console.log(`server:   ${DECIDER_URL ? '(none — stub decider)' : SERVER_URL}`);
   console.log(`fixture:  ${FIXTURE_URL} (${manifest.bugs.length} seeded bugs)`);
-  console.log(`provider: ${PROVIDER_MODEL} @ ${PROVIDER_BASE_URL}`);
+  console.log(`provider: ${PROVIDER_MODEL ?? 'stub'} @ ${DECIDER_URL ?? PROVIDER_BASE_URL}`);
   console.log(`prompt:   version ${promptVersion}`);
   console.log(`runs:     ${RUNS} × autonomous, maxSteps ${MAX_STEPS}\n`);
 
-  const { token, workspaceId, email } = await setUpWorkspace();
-  console.log(`workspace ${workspaceId} ready (${email})\n`);
+  // Smoke mode: the SW POSTs the stub decider directly (deciderBaseUrl
+  // override) — no API server, no provider, no credits; auth is dummies.
+  const { token, workspaceId, email } = DECIDER_URL
+    ? { token: '', workspaceId: '', email: 'smoke' }
+    : await setUpWorkspace();
+  if (!DECIDER_URL) console.log(`workspace ${workspaceId} ready (${email})\n`);
 
   const context = await chromium.launchPersistentContext('', {
     headless: false,
@@ -270,13 +359,16 @@ async function main(): Promise<void> {
           `[${score.bugsFound.join(', ')}], false ${score.falseDefects}`,
       );
     } catch (err) {
-      console.error(`  run ${run} failed: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`  run ${run} failed: ${message}`);
+      const last = err instanceof HarnessRunError ? err.lastState : null;
       scores.push({
         run,
         status: 'harness_error',
-        stepsUsed: 0,
-        llmCalls: 0,
-        correctionTurns: 0,
+        error: message,
+        stepsUsed: last?.budgets.stepsUsed ?? 0,
+        llmCalls: last?.budgets.llmCalls ?? 0,
+        correctionTurns: last?.budgets.correctionTurns ?? 0,
         defects: [],
         bugsFound: [],
         falseDefects: 0,
@@ -305,7 +397,7 @@ async function main(): Promise<void> {
   };
 
   // §13.3: store per prompt version so prompt changes have a regression signal.
-  const modelSlug = PROVIDER_MODEL.toLowerCase().replace(/[^a-z0-9.]+/g, '-');
+  const modelSlug = (PROVIDER_MODEL ?? 'stub').toLowerCase().replace(/[^a-z0-9.]+/g, '-');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const outDir = join(resultsRoot, promptVersion);
   mkdirSync(outDir, { recursive: true });
@@ -315,8 +407,8 @@ async function main(): Promise<void> {
     JSON.stringify(
       {
         promptVersion,
-        model: PROVIDER_MODEL,
-        providerBaseUrl: PROVIDER_BASE_URL,
+        model: PROVIDER_MODEL ?? 'stub',
+        providerBaseUrl: DECIDER_URL ?? PROVIDER_BASE_URL,
         fixture: FIXTURE_URL,
         generatedAt: new Date().toISOString(),
         aggregate,
@@ -342,6 +434,14 @@ async function main(): Promise<void> {
       `avg steps ${aggregate.avgStepsUsed.toFixed(1)} · false defects ${aggregate.totalFalseDefects}`,
   );
   console.log(`scores written to ${outFile}`);
+
+  if (completed.length === 0) {
+    console.error(
+      `\nEVAL FAILED: 0/${RUNS} runs completed (all harness_error) — ` +
+        `results kept for forensics at ${outFile}`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {
