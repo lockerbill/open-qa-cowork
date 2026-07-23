@@ -1,8 +1,8 @@
 # Tasks: Automating Test Execution with LLM
 
-> Current focus: **M5 — UI polish + generator integration + eval harness** (auto-test-mode-spec.md §14) — groups 26–31.
-> M1 (groups 1–8), M2 (groups 9–14), M3 (groups 15–20), and M4 (groups 21–25) are complete — see their implementation notes.
+> **All 127 tasks complete** — M1 (groups 1–8), M2 (groups 9–14), M3 (groups 15–20), M4 (groups 21–25), and M5 (groups 26–31); see each milestone's implementation notes.
 > M4 acceptance met: E2E scenarios 2, 3, 4, 7 green; secret absence proven via the stub decider's request capture + storage/trace/session assertions (scenario 1).
+> M5 acceptance met (31.1–31.3): panel-driven demo run → defect card → one-click prefilled bug report; Playwright draft replays green; `autoTestMode` flipped ON (see M5 notes).
 
 ## 1. Shared auto types (`packages/shared/src/auto/`)
 
@@ -269,11 +269,19 @@
 
 - [x] 30.1 Seeded-bug fixture set (≥ 10 bugs: broken validation, dead button, 500 on save, wrong redirect, label/field mismatch, error toast never clears, …) on the existing fixture server
 - [x] 30.2 Eval runner: N real-LLM runs per configured provider over the seeded fixtures, scoring bugs-found / steps-used / false-defects from traces + `RunResult`s
-- [ ] 30.3 Store scores keyed by prompt version under `eval/results/`; record baseline scores for a cloud provider and the local model (mirroring the M3 acceptance setup)
+- [x] 30.3 Store scores keyed by prompt version under `eval/results/`; record baseline scores for a cloud provider and the local model (mirroring the M3 acceptance setup)
 
 ## 31. M5 acceptance + rollout (§14, §12)
 
 - [x] 31.1 Panel-driven E2E demo run (stub decider for determinism): setup → run → result through the real Auto tab UI, producing a defect card
 - [x] 31.2 Acceptance: the defect card one-click-generates a prefilled bug report, and the run's Playwright draft replays green against the fixture
 - [x] 31.3 Flip `autoTestMode` ON for the store build once acceptance passes (§12) and record it in the implementation notes
-- [ ] 31.4 Run full validation checklist (lint incl. boundary rule, CI grep, unit + smoke + E2E suites green)
+- [x] 31.4 Run full validation checklist (lint incl. boundary rule, CI grep, unit + smoke + E2E suites green)
+
+### M5 implementation notes (deviations from the source spec, per its preamble)
+
+- **Flag flip (31.3)**: with M5 acceptance green, `autoTestMode` defaults ON in ALL builds — `AUTO_TEST_MODE = import.meta.env?.VITE_DISABLE_AUTO_TEST_MODE !== '1'` (`apps/extension/src/shared/flags.ts`) — rather than §12's dev-ON/store-OFF split; `VITE_DISABLE_AUTO_TEST_MODE=1` is the emergency store-build kill switch (rollback = flag off, no data migration).
+- **Eval harness (30.1–30.2)**: seeded fixture `e2e/fixtures/eval-buggy.html` (11 seeded bugs) + keyword manifest `e2e/eval/seeded-bugs.json`; runner `e2e/eval/run-eval.ts` (non-CI) drives N real-LLM autonomous runs through the full real stack and scores bugs-found / steps-used / false-defects from traces + `RunResult`s. Scores are keyed by prompt version = sha256 of the server's `system-prompt.md`, written under `eval/results/<hash>/`. A smoke mode (`EVAL_DECIDER_URL`) targets the stub decider directly — no API server, no provider.
+- **Harness deadline vs controller budget**: the controller's wall-clock budget is derived from the harness deadline minus worst-case in-flight-step headroom, so slow-but-healthy runs finalize as `stopped_by_budget` (a real, scoreable status) instead of `harness_error`; budgets are only checked between steps.
+- **Baselines recorded (30.3)**: prompt version `3e3107d8732e`, 3 autonomous runs × 20 steps, 2026-07-23. *Cloud* (OpenRouter `tencent/hy3`): **unique bugs 6/11, avg steps 14.3, false defects 0** — all 3 runs ended status `error` (mid-run decider transport failure surviving the SW's single retry; `llmCalls ≈ steps + 2`, 0 correction turns — consistent with provider rate-limiting at ~15 calls) yet each found 3–5 bugs before cutoff. *Local* (vLLM `Qwen/Qwen3.6-27B-FP8`): **unique bugs 1/11, avg steps 16.3, false defects 0** (`finished(fail)`, `stopped_by_budget` ×2) — the 27B model explores but almost never reports defects; the cloud-vs-local gap is exactly the model-quality regression signal §13.3 wants. An earlier same-day attempt (pre-`94ada24` harness fixes) had scored all runs `harness_error`; those failures drove the fixes above.
+- **Final validation (31.4, 2026-07-23)**: CI vendor grep gate PASS; `pnpm -r typecheck`, `lint` (incl. the vendor boundary rule), `test` (553 unit tests: shared 66 / extension 314 / server 173), and `build` all green; extension E2E 29/29 passed including the vendor smoke suite and the auto M1–M5 scenarios.
