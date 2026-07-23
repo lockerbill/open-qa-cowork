@@ -82,10 +82,10 @@ Credential values SHALL live only in `chrome.storage.session` (set from the side
 - **THEN** the real value is applied to the page, and the trace, history, and all prompts contain only the token
 
 ### Requirement: Loop detection and budgets bound every run
-The controller SHALL maintain rolling hashes of `(urlAfter, action.type, index, value?)`: the same hash 3× injects a history note nudging a different approach or `finish(blocked)`; 5× finalizes the run as `stopped_by_budget` (`action loop`); 3 consecutive `failed` results inject the same nudge. `maxSteps` (default 25, hard cap 60), `maxWallClockMs` (default 10 min), and `maxLlmCalls` (default maxSteps + 10) SHALL be checked every iteration; exceeding any finalizes as `stopped_by_budget` while still producing the partial trace and report.
+The controller SHALL hash each executed step as `(urlAfter, action.type, index, value?)` and track consecutive repeats: the same hash 3 consecutive times injects a one-shot history note nudging a different approach or `finish(blocked)`; 5 consecutive times finalizes the run as `stopped_by_budget` (`action loop`); 3 consecutive `failed` results inject the same nudge. Non-consecutive repetition (e.g. an A/B/A/B alternation) does not accumulate — budgets bound those runs. `maxSteps` (default 25, hard cap 60), `maxWallClockMs` (default 10 min), and `maxLlmCalls` (default maxSteps + 10) SHALL be checked every iteration; exceeding any finalizes as `stopped_by_budget` while still producing the partial trace and report.
 
 #### Scenario: Action loop terminated
-- **WHEN** the same action hash occurs 5 times
+- **WHEN** the same action hash occurs 5 consecutive times
 - **THEN** the run finalizes as `stopped_by_budget` with reason `action loop`, retaining the partial trace
 
 #### Scenario: Step budget exhausted

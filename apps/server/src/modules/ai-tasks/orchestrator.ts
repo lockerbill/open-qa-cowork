@@ -230,6 +230,8 @@ export interface BugReportInput {
   session: unknown;
   pageModel?: unknown;
   userNote?: string;
+  /** Auto Test Mode defect prefill (auto-test-mode-spec §11). */
+  defect?: { summary: string; expected: string; actual: string; traceExcerpt: string };
   sessionId?: string;
 }
 
@@ -255,6 +257,7 @@ export async function runGenerateBugReport(
           i.session as TestSession,
           (i.pageModel ?? null) as PageModel | null,
           i.userNote ?? '',
+          i.defect,
         ),
       }),
       shape: (raw) => ({ content: stripFences(raw), format: 'markdown' as const }),

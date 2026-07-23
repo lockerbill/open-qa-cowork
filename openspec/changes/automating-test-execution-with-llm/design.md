@@ -24,7 +24,7 @@ Auto Test Mode adds an agent loop on top of this: the LLM decides one action per
 
 ## Architecture (§2)
 
-Side panel (Auto tab) ⇄ service worker (`RunController` state machine, guard layer, credential vault) ⇄ content script (`PageDriver`: ObservationBuilder → redact → serialize; ActionExecutor + settle; SelectorRecorder; StopOverlay) — with the service worker calling `POST /auto/step` on the stateless server (prompt assembly, provider call, schema validation, returns exactly one `Action`).
+Side panel (Auto tab) ⇄ service worker (`RunController` state machine, guard layer, credential vault) ⇄ content script (`PageDriver`: ObservationBuilder → redact → serialize; ActionExecutor + settle; SelectorRecorder; StopOverlay) — with the service worker calling the workspace-scoped `POST /api/workspaces/:workspaceId/auto/step` route on the stateless server (ai-tasks pattern — M3 note; prompt assembly, provider call, schema validation, returns exactly one `Action`).
 
 Per step: SW requests `AUTO_OBSERVE` → assembles `StepRequest` (goal + compact history + redacted observation) → server returns `{action}` → guard layer verdict (execute / confirm / refuse) → `AUTO_EXECUTE` → `ActionResult` + settle → `TraceStep` appended, budgets and loop detection checked → next step or finalize. Navigations destroy the content script; the SW re-injects and re-observes. RefId maps never survive a step boundary.
 
@@ -49,9 +49,9 @@ Per step: SW requests `AUTO_OBSERVE` → assembles `StepRequest` (goal + compact
 - [`dom_tree.js` needs real layout; jsdom can't test it] → vendor smoke suite runs in the existing real-browser test harness on fixture pages (§13.1).
 - [MV3 SW can be killed mid-run] → state persisted to `chrome.storage.session` on every transition; on wake, a `running` run becomes `paused` (`service_worker_restarted`) with a Resume button; no transparent auto-resume in v1 (§7.1).
 - [Local models emit malformed/multiple tool calls] → server-side zod validation with 422 → SW correction turn (max 2 per step, counted against `maxLlmCalls` not `maxSteps`); multi-tool responses take the first call (§8.3–8.5).
-- [Synthetic clicks double-captured by the recorder] → dispatched events carry a marker property; the recorder skips marked events, keeping only the explicit `source:'auto'` entry (§6.4.9).
+- [Synthetic clicks double-captured by the recorder] → recorder capture is suppressed during executor dispatch (dispatch bracket — vendored primitives dispatch events we can't tag, and synthetic clicks fire trusted `submit` events), keeping only the explicit `source:'auto'` entry (§6.4.9, M1 note).
 - [Element covered by overlay at click time] → hit-test gate returns `covered` with the covering element's tag/text — frequently the very bug the QA wants; the model can convert it to `report_defect` (§6.4.5).
-- [Runaway loops / burned budget] → rolling action-hash loop detection (3× → injected nudge, 5× → finalize `stopped_by_budget`), plus `maxSteps` / `maxWallClockMs` / `maxLlmCalls` (§9.5–9.6).
+- [Runaway loops / burned budget] → consecutive-streak action-hash loop detection (3 consecutive → one-shot nudge, 5 consecutive → finalize `stopped_by_budget`; non-consecutive alternation is bounded by budgets), plus `maxSteps` / `maxWallClockMs` / `maxLlmCalls` (§9.5–9.6, M4 note).
 - [Observation too large for small local models] → viewport expansion 400 px re-run at 0 when interactive-element count exceeds 150, truncation noted in the serialized footer; history compression (§6.2, §7.5).
 
 ## Migration Plan
@@ -62,5 +62,7 @@ Milestones (§14): M1 vendor + PageDriver (no LLM, hardcoded action list drives 
 
 ## Open Questions
 
-- Exact module names/paths in the existing repo for the redaction utilities, selector ladder, recorder event schema, and untrusted-content prompt delimiters — the source spec instructs adapting to the nearest existing equivalent and noting deviations in the PR description (§ preamble note).
-- Whether the existing console/network capture used by suggest mode can be reused directly for per-step drain semantics or needs a parallel capture path (§6.5 says reuse if present).
+_Both resolved during M1–M3 (see the milestone implementation notes in tasks.md):_
+
+- Exact module names/paths for the redaction utilities, selector ladder, recorder event schema, and untrusted-content delimiters — **resolved**: the existing shared detectors and token format (`[EMAIL]`, `[REDACTED]`, …), the existing selector-priority ladder, `source:'auto'` recorder events, and `asUntrustedData` (`redaction/guard.ts`) are all reused (M1/M3 notes).
+- Whether suggest-mode console/network capture can be reused for per-step drain semantics — **resolved**: in-flight request tracking lives in the main-world `public/injected.js` (MV3 isolated worlds cannot see the page's own `fetch`/XHR); `step-capture.ts` adds the per-step counters and drain on top (M1 note).

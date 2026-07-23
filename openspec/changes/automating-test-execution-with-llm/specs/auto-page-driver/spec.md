@@ -55,7 +55,7 @@ The `PageDriver.observe()` method SHALL build an `Observation` using the vendore
 - **THEN** `epoch` increments and the previous snapshot's element indices are no longer valid
 
 ### Requirement: Per-node redaction reuses existing detectors before serialization
-Redaction SHALL happen per-node inside the observation builder — never as a pass over the serialized string — via a `redactNode` callback inserted into the vendored `flatTreeToString`. It SHALL reuse the existing shared PII/secret detectors: secret fields (password inputs, sensitive `autocomplete` values, name/id matches of the existing secret-field detector) are marked `isSecret` with values replaced by `«secret»` and text never emitted; PII matches in any emitted text or attribute value are replaced with the existing token format; single text nodes are capped at 120 characters.
+Redaction SHALL happen per-node inside the observation builder — never as a pass over the serialized string — via a `redactNode` callback inserted into the vendored `flatTreeToString`. It SHALL reuse the existing shared PII/secret detectors: secret fields (password inputs, sensitive `autocomplete` values, name/id matches of the existing secret-field detector) are marked `isSecret` with values replaced by the repo's existing secret token (e.g. `[REDACTED]`) and text never emitted; PII matches in any emitted text or attribute value are replaced with the existing token format; single text nodes are capped at 120 characters.
 
 #### Scenario: Password value never serialized
 - **WHEN** a page contains `input[type=password]` with a value
@@ -103,7 +103,7 @@ The content script SHALL capture console errors (`console.error`, `window.onerro
 - **THEN** the next observation's `failedRequests` contains its method, URL, and status
 
 ### Requirement: Executed actions mirror into the existing session recorder
-Every executed action SHALL be written to the existing session recorder as a synthetic event tagged `source:'auto'`, carrying `durableSelector`, `elementText`, and `intent`, so it appears in the session timeline like a human action. Dispatched synthetic DOM events MUST carry a marker property, and the recorder MUST skip marked events so each auto action appears exactly once.
+Every executed action SHALL be written to the existing session recorder as a synthetic event tagged `source:'auto'`, carrying `durableSelector`, `elementText`, and `intent`, so it appears in the session timeline like a human action. The recorder MUST NOT double-capture the executor's synthetic dispatches: recorder capture is suppressed for the duration of each dispatch (a dispatch bracket — vendored primitives dispatch events internally where no marker can be attached, and the browser fires the resulting form `submit` as trusted), so each auto action appears exactly once.
 
 #### Scenario: No double capture
 - **WHEN** the executor dispatches a synthetic click that the recorder's DOM listeners also observe

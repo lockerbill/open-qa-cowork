@@ -82,6 +82,14 @@ export function generateTestCases(
   return api<GenerateResponse>(backendUrl, '/api/generate/test-cases', { body: payload });
 }
 
+/** Auto-run defect prefill accepted by the bug-report generator (auto-test-mode-spec §11). */
+export interface DefectPayload {
+  summary: string;
+  expected: string;
+  actual: string;
+  traceExcerpt: string;
+}
+
 export function generateBugReport(
   backendUrl: string,
   payload: {
@@ -90,6 +98,7 @@ export function generateBugReport(
     userNote: string;
     includeConsoleErrors?: boolean;
     includeNetworkFailures?: boolean;
+    defect?: DefectPayload;
   },
 ): Promise<GenerateResponse> {
   return api<GenerateResponse>(backendUrl, '/api/generate/bug-report', { body: payload });
@@ -281,7 +290,12 @@ interface GatewayBugReport {
 export async function generateBugReportSmart(
   backendUrl: string,
   auth: AuthState,
-  payload: { session: TestSession; pageModel: PageModel | null; userNote: string },
+  payload: {
+    session: TestSession;
+    pageModel: PageModel | null;
+    userNote: string;
+    defect?: DefectPayload;
+  },
 ): Promise<GenerateResponse> {
   if (canUseGateway(auth)) {
     try {

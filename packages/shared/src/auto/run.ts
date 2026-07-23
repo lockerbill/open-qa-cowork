@@ -76,6 +76,22 @@ export interface TraceStep {
   endedAt: number;
 }
 
+/**
+ * Per-run local metrics (§12): steps, LLM calls, corrections, refusals,
+ * confirmations, wall clock — shown in the result view and stored with the
+ * RunResult. No external telemetry.
+ */
+export interface RunMetrics {
+  steps: number;
+  llmCalls: number;
+  correctionTurns: number;
+  /** Guard refusals recorded in the trace. */
+  refusals: number;
+  /** Steps that went through the confirmation flow (approved or rejected). */
+  confirmations: number;
+  wallClockMs: number;
+}
+
 export interface RunResult {
   status: RunStatus;
   outcome?: 'pass' | 'fail' | 'blocked';
@@ -83,6 +99,8 @@ export interface RunResult {
   trace: TraceStep[];
   defects: Array<Extract<Action, { type: 'report_defect' }> & { step: number }>;
   assertions: Array<Extract<Action, { type: 'assert' }> & { step: number }>;
+  /** Absent on runs persisted by pre-M5 builds. */
+  metrics?: RunMetrics;
   /** The recorder session this run wrote into. */
   sessionId: string;
 }

@@ -150,6 +150,27 @@ describe('POST /api/generate/bug-report', () => {
     expect(res.body.content).toContain('Bug');
     expect(provider.lastUser).toContain('Expected default date');
   });
+
+  it('feeds the optional auto-run defect prefill into the prompt as untrusted data (§11)', async () => {
+    provider.response = '# Bug';
+    const res = await request(app)
+      .post('/api/generate/bug-report')
+      .send({
+        session,
+        pageModel: null,
+        userNote: '',
+        defect: {
+          summary: 'Save returns 500',
+          expected: 'item saved',
+          actual: 'error toast',
+          traceExcerpt: '#1 click [0] → ok\n#2 click [1] → failed',
+        },
+      });
+    expect(res.status).toBe(200);
+    expect(provider.lastUser).toContain('auto_run_defect');
+    expect(provider.lastUser).toContain('Save returns 500');
+    expect(provider.lastUser).toContain('#2 click [1]');
+  });
 });
 
 describe('POST /api/generate/playwright', () => {

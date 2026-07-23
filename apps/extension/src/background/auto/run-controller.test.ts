@@ -1113,3 +1113,52 @@ describe('RunResult plumbing (24.2, §5.4)', () => {
     expect(result.trace).toHaveLength(3);
   });
 });
+
+describe('per-run metrics (28.1, §12)', () => {
+  it('accumulates steps, llm calls, refusals, and wall clock into RunResult.metrics', async () => {
+    const h = makeHarness();
+    const FILL: Action = { type: 'fill', index: 0, value: 'x', intent: 'try to type' };
+    scriptDecider(h, [FILL, FINISH]);
+    // observe_only refuses the fill (§9.2) — the refusal must be counted.
+    await h.controller.start(makeConfig({ mode: 'observe_only' }), 1);
+    await h.waitForStatus('finished');
+
+    expect(h.runResults[0]!.metrics).toEqual({
+      steps: 2,
+      llmCalls: 2,
+      correctionTurns: 0,
+      refusals: 1,
+      confirmations: 0,
+      wallClockMs: h.clock.t,
+    });
+  });
+
+  it('counts correction turns in the metrics', async () => {
+    const h = makeHarness();
+    let call = 0;
+    h.decide.mockImplementation(async () =>
+      call++ === 0
+        ? ({ action: { type: 'execute_js' } } as unknown as StepResponse)
+        : { action: FINISH },
+    );
+    await h.controller.start(makeConfig(), 1);
+    await h.waitForStatus('finished');
+
+    expect(h.runResults[0]!.metrics).toMatchObject({
+      steps: 1,
+      llmCalls: 2,
+      correctionTurns: 1,
+    });
+  });
+
+  it('stopped_by_budget results still carry the partial metrics', async () => {
+    const h = makeHarness();
+    const SCROLL: Action = { type: 'scroll', direction: 'down', amount: 'page' };
+    const SCROLL_UP: Action = { type: 'scroll', direction: 'up', amount: 'page' };
+    scriptDecider(h, [SCROLL, SCROLL_UP, SCROLL]);
+    await h.controller.start(makeConfig({ maxSteps: 3 }), 1);
+    await h.waitForStatus('stopped_by_budget');
+
+    expect(h.runResults[0]!.metrics).toMatchObject({ steps: 3, llmCalls: 3, refusals: 0 });
+  });
+});

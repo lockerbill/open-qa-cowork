@@ -152,7 +152,12 @@ export function createApp(
       const body = bugReportSchema.parse(req.body);
       const text = await provider.complete({
         system: bugReportSystem(),
-        user: bugReportUser(body.session as never, (body.pageModel ?? null) as never, body.userNote),
+        user: bugReportUser(
+          body.session as never,
+          (body.pageModel ?? null) as never,
+          body.userNote,
+          body.defect,
+        ),
         maxTokens: 2048,
       });
       res.json({

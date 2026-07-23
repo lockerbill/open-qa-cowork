@@ -1,0 +1,60 @@
+{
+  "fixture": "/eval-buggy.html",
+  "bugs": [
+    {
+      "id": "dead-refresh",
+      "title": "Refresh button does nothing",
+      "keywords": ["refresh"]
+    },
+    {
+      "id": "validation-missing",
+      "title": "Add task accepts an empty title",
+      "keywords": ["empty", "blank", "required", "validation", "without a title", "no title"]
+    },
+    {
+      "id": "save-500",
+      "title": "Save settings fails with HTTP 500",
+      "keywords": ["500", "save", "saving"]
+    },
+    {
+      "id": "wrong-redirect",
+      "title": "View archive link opens the Help page",
+      "keywords": ["archive", "help", "redirect", "wrong page"]
+    },
+    {
+      "id": "label-mismatch",
+      "title": "Email address label is attached to the phone field",
+      "keywords": ["label", "email", "phone", "mismatch"]
+    },
+    {
+      "id": "sticky-toast",
+      "title": "Import error toast never clears",
+      "keywords": ["toast", "import", "dismiss", "clear", "stuck", "remains", "never disappears"]
+    },
+    {
+      "id": "console-error",
+      "title": "Load stats throws a console TypeError",
+      "keywords": ["stats", "console", "typeerror", "error is thrown", "javascript error"]
+    },
+    {
+      "id": "count-stale",
+      "title": "Tasks counter never updates",
+      "keywords": ["count", "counter", "(0)", "stays at 0", "not update"]
+    },
+    {
+      "id": "dead-delete",
+      "title": "Row Delete buttons do nothing",
+      "keywords": ["delete", "remove"]
+    },
+    {
+      "id": "sort-broken",
+      "title": "Sort A→Z sorts descending",
+      "keywords": ["sort", "order", "descending", "z→a", "reverse"]
+    },
+    {
+      "id": "clear-broken",
+      "title": "Clear completed removes all tasks",
+      "keywords": ["clear", "all tasks", "incomplete", "uncompleted", "every task"]
+    }
+  ]
+}

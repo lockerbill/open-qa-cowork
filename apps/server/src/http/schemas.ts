@@ -29,12 +29,21 @@ export const testCasesSchema = z.object({
   focus: z.string().optional(),
 });
 
+/** Auto Test Mode defect prefill (auto-test-mode-spec §11). */
+const defectPrefillSchema = z.object({
+  summary: z.string().max(300),
+  expected: z.string().max(300),
+  actual: z.string().max(300),
+  traceExcerpt: z.string().max(4000),
+});
+
 export const bugReportSchema = z.object({
   session: sessionSchema,
   pageModel: pageModelSchema.nullable().optional(),
   userNote: z.string().default(''),
   includeConsoleErrors: z.boolean().optional(),
   includeNetworkFailures: z.boolean().optional(),
+  defect: defectPrefillSchema.optional(),
 });
 
 export const playwrightSchema = z.object({
@@ -118,6 +127,7 @@ export const aiGenerateBugReportSchema = z.object({
   session: sessionSchema,
   pageModel: pageModelSchema.nullable().optional(),
   userNote: z.string().default(''),
+  defect: defectPrefillSchema.optional(),
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
   environmentId: z.string().optional(),

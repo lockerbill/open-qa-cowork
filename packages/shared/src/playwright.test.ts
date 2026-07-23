@@ -57,6 +57,34 @@ describe('buildPlaywrightSpec (spec §9.10)', () => {
     expect(spec.content).toContain("await page.getByLabel('Supplier').fill('Acme Corp');");
   });
 
+  it('emits // intent comments above steps carrying an auto-run intent (§11)', () => {
+    const spec = buildPlaywrightSpec(
+      session([
+        ev({
+          id: 'e1',
+          type: 'click',
+          targetLabel: 'Sign in',
+          selectorCandidates: ["getByRole('button', { name: 'Sign in' })"],
+          source: 'auto',
+          intent: 'submit login',
+        }),
+        ev({
+          id: 'e2',
+          type: 'click',
+          targetLabel: 'Add item',
+          selectorCandidates: ["getByRole('button', { name: 'Add item' })"],
+        }),
+      ]),
+    );
+    const lines = spec.content.split('\n');
+    const intentAt = lines.findIndex((l) => l.trim() === '// intent: submit login');
+    expect(intentAt).toBeGreaterThan(-1);
+    expect(lines[intentAt + 1]).toContain('// click: Sign in');
+    // Events without an intent stay untouched.
+    expect(spec.content).not.toContain('// intent: undefined');
+    expect(spec.content.match(/\/\/ intent:/g)).toHaveLength(1);
+  });
+
   it('does not emit values for sensitive (unrecorded) inputs', () => {
     const spec = buildPlaywrightSpec(
       session([

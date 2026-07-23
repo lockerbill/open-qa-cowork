@@ -47,6 +47,8 @@ async function saveRunResult(result: RunResult): Promise<void> {
     session.autoRunResult = result;
     await saveSession(session);
   });
+  // The result view renders from the session (§10) — refresh the panel.
+  chrome.runtime.sendMessage({ type: STATE_CHANGED }).catch(() => {});
 }
 
 async function readPersistedRun(): Promise<PersistedAutoRun | null> {

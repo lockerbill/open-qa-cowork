@@ -23,6 +23,8 @@ import { ChatTab } from './ChatTab.js';
 import { JiraAction, type JiraExportSource } from './IssueComposer.js';
 import { AUTO_TEST_MODE } from '../shared/flags.js';
 import { AutoTab } from './auto/AutoTab.js';
+import { deriveSuggestedCases } from './auto/setup-logic.js';
+import { defectNoteText, type DefectPrefill } from './auto/result-logic.js';
 
 /** Map an AI-task error to a role-aware, user-facing message. */
 function explainError(e: unknown, role: string | null): string {
@@ -50,6 +52,11 @@ export function App() {
   const [state, setState] = useState<PanelState | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [tab, setTab] = useState<Tab>('page');
+  // Auto tab plumbing (§10, §11): the suggested-case picker feeds off the last
+  // analyze/test-cases results; a defect card opens Generate prefilled.
+  const [analyze, setAnalyze] = useState<AnalyzeResponse | null>(null);
+  const [testCasesMd, setTestCasesMd] = useState<string | null>(null);
+  const [defectPrefill, setDefectPrefill] = useState<DefectPrefill | null>(null);
 
   const refresh = useCallback(async () => {
     setState(await bg.getState());
@@ -111,11 +118,28 @@ export function App() {
       </nav>
 
       <div className="content">
-        {tab === 'page' && <PageTab state={state} settings={settings} />}
+        {tab === 'page' && <PageTab state={state} settings={settings} onAnalyzed={setAnalyze} />}
         {tab === 'session' && <SessionTab state={state} onChange={refresh} />}
-        {tab === 'generate' && <GenerateTab state={state} settings={settings} />}
+        {tab === 'generate' && (
+          <GenerateTab
+            state={state}
+            settings={settings}
+            defectPrefill={defectPrefill}
+            onTestCases={setTestCasesMd}
+          />
+        )}
         {tab === 'chat' && <ChatTab settings={settings} />}
-        {tab === 'auto' && AUTO_TEST_MODE && <AutoTab activeOrigin={state.activeOrigin} />}
+        {tab === 'auto' && AUTO_TEST_MODE && (
+          <AutoTab
+            state={state}
+            suggestedCases={deriveSuggestedCases(testCasesMd, analyze?.suggestedTests)}
+            onGenerateBugReport={(defect) => {
+              setDefectPrefill(defect);
+              setTab('generate');
+            }}
+            onOpenGenerate={() => setTab('generate')}
+          />
+        )}
       </div>
     </div>
   );
@@ -273,7 +297,16 @@ function formatAnalyzePreview(answer: AnalyzeResponse): string {
   return lines.join('\n');
 }
 
-function PageTab({ state, settings }: { state: PanelState; settings: Settings | null }) {
+function PageTab({
+  state,
+  settings,
+  onAnalyzed,
+}: {
+  state: PanelState;
+  settings: Settings | null;
+  /** Mirrors the result up so the Auto tab's suggested-case picker can use it (§10). */
+  onAnalyzed: (answer: AnalyzeResponse) => void;
+}) {
   const summary = state.pageModel?.summary;
   const [answer, setAnswer] = useState<AnalyzeResponse | null>(null);
   const [err, setErr] = useState('');
@@ -287,13 +320,13 @@ function PageTab({ state, settings }: { state: PanelState; settings: Settings | 
     setCanConfig(false);
     try {
       const auth = await getAuth();
-      setAnswer(
-        await analyzePageSmart(settings.backendUrl, auth, {
-          pageModel: state.pageModel,
-          question: 'What should I test on this page?',
-          environment: settings.environment,
-        }),
-      );
+      const result = await analyzePageSmart(settings.backendUrl, auth, {
+        pageModel: state.pageModel,
+        question: 'What should I test on this page?',
+        environment: settings.environment,
+      });
+      setAnswer(result);
+      onAnalyzed(result);
     } catch (e) {
       setErr(explainError(e, state.auth.role));
       setCanConfig(showConfigure(e, state.auth.role));
@@ -491,6 +524,11 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
           {session.events.map((e) => (
             <li key={e.id}>
               <span className="type">{e.type}</span>
+              {e.source === 'auto' && (
+                <span className="chip" title="Executed by Auto Test Mode">
+                  ⚙
+                </span>
+              )}
               {e.targetLabel ? ` → ${e.targetLabel}` : ''}
               {e.valueType === 'sensitive'
                 ? ' (value hidden)'
@@ -535,7 +573,19 @@ function SessionTab({ state, onChange }: { state: PanelState; onChange: () => vo
   );
 }
 
-function GenerateTab({ state, settings }: { state: PanelState; settings: Settings | null }) {
+function GenerateTab({
+  state,
+  settings,
+  defectPrefill,
+  onTestCases,
+}: {
+  state: PanelState;
+  settings: Settings | null;
+  /** Auto-run defect card prefill (§11) — seeds the note and the request payload. */
+  defectPrefill: DefectPrefill | null;
+  /** Mirrors generated test-case markdown up for the Auto tab's picker (§10). */
+  onTestCases: (markdown: string) => void;
+}) {
   const [note, setNote] = useState('');
   const [tc, setTc] = useState<GenerateResponse | null>(null);
   const [bug, setBug] = useState<GenerateResponse | null>(null);
@@ -544,6 +594,11 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
   const [busy, setBusy] = useState<string | null>(null);
 
   const [canConfig, setCanConfig] = useState(false);
+
+  // A defect card in the Auto tab opens this generator prefilled (§11).
+  useEffect(() => {
+    if (defectPrefill) setNote(defectNoteText(defectPrefill));
+  }, [defectPrefill]);
 
   const run = async (key: string, fn: () => Promise<void>) => {
     setBusy(key);
@@ -570,11 +625,11 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
         onClick={() =>
           run('tc', async () => {
             const auth = await getAuth();
-            setTc(
-              await generateTestCasesSmart(settings.backendUrl, auth, {
-                pageModel: state.pageModel!,
-              }),
-            );
+            const result = await generateTestCasesSmart(settings.backendUrl, auth, {
+              pageModel: state.pageModel!,
+            });
+            setTc(result);
+            onTestCases(result.content);
           })
         }
       >
@@ -608,6 +663,7 @@ function GenerateTab({ state, settings }: { state: PanelState; settings: Setting
                 session: state.session,
                 pageModel: state.pageModel,
                 userNote: note,
+                ...(defectPrefill ? { defect: defectPrefill } : {}),
               }),
             );
           })

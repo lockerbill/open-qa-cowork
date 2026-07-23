@@ -1,11 +1,11 @@
 # auto-step-endpoint
 
-Stateless server endpoint `POST /auto/step`: prompt assembly with anti-injection posture, provider adaptation (tool-calling and JSON mode), zod validation of the returned action, and correction-turn support. (Source detail: auto-test-mode-spec.md §8.)
+Stateless server auto-step endpoint (workspace-scoped `POST /api/workspaces/:workspaceId/auto/step`): prompt assembly with anti-injection posture, provider adaptation (tool-calling and JSON mode), zod validation of the returned action, and correction-turn support. (Source detail: auto-test-mode-spec.md §8.)
 
 ## ADDED Requirements
 
 ### Requirement: POST /auto/step is a stateless decision gateway
-`apps/server` SHALL expose `POST /auto/step` accepting a `StepRequest` and responding `200 {action}`, `422 {error:'invalid_action', detail, modelRaw?}`, `502 {error:'provider_error'}`, or `504 {error:'provider_timeout'}` (provider timeout 60 s). The endpoint SHALL hold no run state, and SHALL use the same auth, provider registry, server-side keys, and logging policy (metadata, not payloads) as the existing suggest endpoints, behind the same enablement/config as other LLM routes. `modelRaw` SHALL appear in 422 responses only when `AUTO_STEP_DEBUG=1`.
+`apps/server` SHALL expose the auto-step decision route — mounted workspace-scoped as `POST /api/workspaces/:workspaceId/auto/step` following the ai-tasks pattern (provider resolution via `projectId`/`environmentId` in the request body); the bare `/auto/step` path remains the contract shape the E2E stub decider serves — accepting a `StepRequest` and responding `200 {action}`, `422 {error:'invalid_action', detail, modelRaw?}`, `502 {error:'provider_error'}`, or `504 {error:'provider_timeout'}` (provider timeout 60 s). The endpoint SHALL hold no run state, and SHALL use the same auth, provider registry, server-side keys, and logging policy (metadata, not payloads) as the existing suggest endpoints, behind the same enablement/config as other LLM routes. `modelRaw` SHALL appear in 422 responses only when `AUTO_STEP_DEBUG=1`.
 
 #### Scenario: Valid step decision
 - **WHEN** a valid `StepRequest` is posted and the provider returns a well-formed action

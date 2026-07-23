@@ -58,14 +58,28 @@ export function bugReportSystem(): string {
   );
 }
 
+/** Auto Test Mode defect prefill (auto-test-mode-spec §11). */
+export interface DefectPrefill {
+  summary: string;
+  expected: string;
+  actual: string;
+  traceExcerpt: string;
+}
+
 export function bugReportUser(
   session: TestSession,
   pageModel: PageModel | null,
   userNote: string,
+  defect?: DefectPrefill,
 ): string {
   return [
     asUntrustedData('session', session),
     pageModel ? asUntrustedData('page_model', pageModel) : '',
+    // Defect content originates from a model reading the page — untrusted.
+    defect ? asUntrustedData('auto_run_defect', defect) : '',
+    defect
+      ? 'An automated exploratory run reported the defect above; base the report on its summary/expected/actual and use its trace excerpt for the reproduction steps.'
+      : '',
     '',
     `Tester note / expected behavior: ${userNote || '(none provided — ask under Assumptions)'}`,
     'Write the bug report now.',

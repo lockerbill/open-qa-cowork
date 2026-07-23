@@ -1,0 +1,154 @@
+<!doctype html>
+<!--
+  Seeded-bug eval fixture (auto-test-mode-spec §13.3): "TaskTrack", a small
+  task-manager page with 11 deliberately seeded bugs. The model-quality eval
+  harness (e2e/eval/run-eval.ts) runs real-LLM auto-test runs against this
+  page and scores report_defect output against e2e/eval/seeded-bugs.json.
+
+  Seeded bugs (ids from the manifest):
+    1.  dead-refresh       Refresh button has no handler — nothing happens.
+    2.  validation-missing Add task accepts an empty title (adds a blank row).
+    3.  save-500           Save settings POSTs /api/broken → HTTP 500.
+    4.  wrong-redirect     "View archive" link goes to the Help page.
+    5.  label-mismatch     "Email address" label is attached to the phone field.
+    6.  sticky-toast       Import shows an error toast that never clears.
+    7.  console-error      Load stats throws a TypeError (stats stay empty).
+    8.  count-stale        The "Tasks (n)" counter never updates.
+    9.  dead-delete        Row Delete buttons do nothing.
+    10. sort-broken        "Sort A→Z" actually sorts Z→A.
+    11. clear-broken       "Clear completed" removes ALL tasks.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TaskTrack — team task manager</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 24px; max-width: 720px; }
+      section { border: 1px solid #ccc; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+      h2 { font-size: 16px; margin: 0 0 8px; }
+      label { display: block; margin: 6px 0 2px; font-size: 13px; }
+      input, select { padding: 4px 6px; }
+      button { margin: 4px 4px 4px 0; padding: 5px 10px; }
+      ul { padding-left: 20px; }
+      li { margin: 3px 0; }
+      .toast { position: fixed; bottom: 16px; right: 16px; background: #b3261e; color: #fff;
+               padding: 10px 14px; border-radius: 6px; display: none; }
+      .muted { color: #666; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>TaskTrack</h1>
+    <p class="muted">Team task manager — staging build.</p>
+
+    <section aria-label="tasks">
+      <h2>Tasks (<span id="task-count">0</span>)</h2>
+      <ul id="task-list"></ul>
+      <label for="task-title">New task title (required)</label>
+      <input id="task-title" name="task-title" type="text" placeholder="e.g. Ship release notes" />
+      <label for="task-done">Completed</label>
+      <input id="task-done" name="task-done" type="checkbox" />
+      <div>
+        <button id="add-task">Add task</button>
+        <button id="refresh-list">Refresh</button>
+        <button id="sort-tasks">Sort A→Z</button>
+        <button id="clear-completed">Clear completed</button>
+      </div>
+    </section>
+
+    <section aria-label="contact">
+      <h2>Notification contact</h2>
+      <!-- BUG label-mismatch: the "Email address" label points at the phone field. -->
+      <label for="contact-phone">Email address</label>
+      <input id="contact-email" name="contact-email" type="text" placeholder="you@example.com" />
+      <label for="contact-email">Phone</label>
+      <input id="contact-phone" name="contact-phone" type="text" placeholder="+1 555 0100" />
+      <div>
+        <button id="save-settings">Save settings</button>
+        <button id="import-contacts">Import contacts</button>
+      </div>
+      <div id="save-result" class="muted"></div>
+    </section>
+
+    <section aria-label="stats">
+      <h2>Stats</h2>
+      <div id="stats" class="muted">No stats loaded.</div>
+      <button id="load-stats">Load stats</button>
+    </section>
+
+    <p>
+      <!-- BUG wrong-redirect: labeled archive, goes to the help page. -->
+      <a id="archive-link" href="/eval-help.html">View archive</a>
+    </p>
+
+    <div id="toast" class="toast">Import failed: contact service unavailable</div>
+
+    <script>
+      const list = document.getElementById('task-list');
+      const tasks = [
+        { title: 'Prepare demo environment', done: true },
+        { title: 'Review pull request #42', done: false },
+      ];
+
+      function render() {
+        list.innerHTML = '';
+        for (const task of tasks) {
+          const li = document.createElement('li');
+          li.textContent = (task.done ? '✔ ' : '') + task.title + ' ';
+          const del = document.createElement('button');
+          del.textContent = 'Delete';
+          // BUG dead-delete: no click handler is attached.
+          li.appendChild(del);
+          list.appendChild(li);
+        }
+        // BUG count-stale: #task-count is never written after load.
+      }
+      render();
+
+      document.getElementById('add-task').addEventListener('click', () => {
+        // BUG validation-missing: the required title is not validated.
+        const input = document.getElementById('task-title');
+        tasks.push({ title: input.value, done: document.getElementById('task-done').checked });
+        input.value = '';
+        render();
+      });
+
+      // BUG dead-refresh: #refresh-list has no listener at all.
+
+      document.getElementById('sort-tasks').addEventListener('click', () => {
+        // BUG sort-broken: descending instead of the advertised A→Z.
+        tasks.sort((a, b) => b.title.localeCompare(a.title));
+        render();
+      });
+
+      document.getElementById('clear-completed').addEventListener('click', () => {
+        // BUG clear-broken: removes everything, not just completed tasks.
+        tasks.length = 0;
+        render();
+      });
+
+      document.getElementById('save-settings').addEventListener('click', async () => {
+        // BUG save-500: the endpoint always answers HTTP 500.
+        document.getElementById('save-result').textContent = 'Saving…';
+        try {
+          const res = await fetch('/api/broken', { method: 'POST', body: '{}' });
+          document.getElementById('save-result').textContent = res.ok
+            ? 'Saved.'
+            : 'Saving…';
+        } catch {
+          /* left pending forever */
+        }
+      });
+
+      document.getElementById('import-contacts').addEventListener('click', () => {
+        // BUG sticky-toast: shown, never hidden, no dismiss affordance.
+        document.getElementById('toast').style.display = 'block';
+      });
+
+      document.getElementById('load-stats').addEventListener('click', () => {
+        // BUG console-error: `summary` is undefined → TypeError in console.
+        const data = undefined;
+        document.getElementById('stats').textContent = data.summary;
+      });
+    </script>
+  </body>
+</html>

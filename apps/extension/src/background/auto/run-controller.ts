@@ -909,17 +909,23 @@ export class RunController {
     // Defect & assertion plumbing (§5.4): the RunResult persists with the
     // recorder session so runs are reviewable after the fact (§10). Partial
     // runs (budget stops, errors) keep whatever the trace collected.
-    await this.deps.saveRunResult(buildRunResult(run, status)).catch(() => {});
+    await this.deps.saveRunResult(buildRunResult(run, status, this.deps.now())).catch(() => {});
     await this.hideOverlay();
     await this.transition('done', detail);
   }
 }
 
-/** Derive the persisted RunResult from the trace (§5.4). */
-function buildRunResult(run: RunInternal, status: RunStatus): RunResult {
+/** Derive the persisted RunResult from the trace (§5.4), incl. metrics (§12). */
+function buildRunResult(run: RunInternal, status: RunStatus, endedAt: number): RunResult {
   const defects: RunResult['defects'] = [];
   const assertions: RunResult['assertions'] = [];
+  let refusals = 0;
+  let confirmations = 0;
   for (const step of run.trace) {
+    if (step.result === 'refused') refusals += 1;
+    if (step.result === 'confirmed_by_user' || step.result === 'rejected_by_user') {
+      confirmations += 1;
+    }
     if (step.result !== 'ok' && step.result !== 'confirmed_by_user') continue;
     if (step.action.type === 'report_defect') defects.push({ ...step.action, step: step.step });
     if (step.action.type === 'assert') assertions.push({ ...step.action, step: step.step });
@@ -931,6 +937,14 @@ function buildRunResult(run: RunInternal, status: RunStatus): RunResult {
     trace: run.trace,
     defects,
     assertions,
+    metrics: {
+      steps: run.stepsUsed,
+      llmCalls: run.llmCalls,
+      correctionTurns: run.correctionTurns,
+      refusals,
+      confirmations,
+      wallClockMs: endedAt - run.startedAt,
+    },
     sessionId: run.sessionId,
   };
 }

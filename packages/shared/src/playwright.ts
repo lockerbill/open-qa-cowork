@@ -128,7 +128,14 @@ export function buildPlaywrightSpec(session: TestSession): PlaywrightSpec {
   for (const ev of session.events) {
     const lines = stepForEvent(ev, warnings);
     if (lines.length > 0) {
-      body.push('', `  // ${ev.type}${ev.targetLabel ? `: ${ev.targetLabel}` : ''}`, ...lines);
+      body.push(
+        '',
+        // Auto Test Mode records the model's stated intent per action
+        // (auto-test-mode-spec §11) — surface it above the step.
+        ...(ev.intent ? [`  // intent: ${ev.intent}`] : []),
+        `  // ${ev.type}${ev.targetLabel ? `: ${ev.targetLabel}` : ''}`,
+        ...lines,
+      );
     }
   }
 

@@ -169,6 +169,15 @@ describe('generateBugReportSmart', () => {
     expect(body).not.toHaveProperty('projectId');
     expect(body).not.toHaveProperty('environmentId');
   });
+
+  it('forwards the auto-run defect prefill to the gateway (§11)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      res(200, { taskRunId: 'r', bugReport: { content: 'c', format: 'markdown' }, usage: {} }),
+    );
+    const defect = { summary: 's', expected: 'e', actual: 'a', traceExcerpt: '#1 x' };
+    await generateBugReportSmart(BACKEND, auth, { session, pageModel, userNote: '', defect });
+    expect(bodyOf().defect).toEqual(defect);
+  });
 });
 
 describe('sendChatMessageSmart', () => {

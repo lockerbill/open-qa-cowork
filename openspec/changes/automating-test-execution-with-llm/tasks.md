@@ -1,6 +1,6 @@
 # Tasks: Automating Test Execution with LLM
 
-> Current focus: **M5 — UI polish + generator integration + eval harness** (auto-test-mode-spec.md §14) — expand group 26 via `/opsx:update`.
+> Current focus: **M5 — UI polish + generator integration + eval harness** (auto-test-mode-spec.md §14) — groups 26–31.
 > M1 (groups 1–8), M2 (groups 9–14), M3 (groups 15–20), and M4 (groups 21–25) are complete — see their implementation notes.
 > M4 acceptance met: E2E scenarios 2, 3, 4, 7 green; secret absence proven via the stub decider's request capture + storage/trace/session assertions (scenario 1).
 
@@ -236,6 +236,44 @@
 - **The fixture creds hint names the placeholder, not the password**: the secret-absence instrumentation immediately caught `Sign in with … / Secret123!` page text reaching the decider (page copy, not a vault leak). The page now says `the {{TEST_USER_PASSWORD}} credential`, which is also how real models are meant to fill secret fields; scenario 1 now exercises vault substitution end-to-end (login only succeeds if the real value reached the page).
 - **Stub decider grew a capture surface** (`GET`/`DELETE /captured`, raw request bodies) — what the SW sends the decider is exactly what a real model would see, making it the assertion point for secret absence (scenario 1) and canary delivery (scenario 7). The `kill_switch` scenario now alternates wait durations so the new loop detector cannot finalize scenario 9 before the test uses the kill switch.
 
-## 26. Later milestones (deferred — expand via /opsx:update after M4)
+## 26. Auto tab setup view (§10 — replaces the M2 flag-gated stub)
 
-- [ ] 26.1 M5 — UI polish + generator integration + eval harness: result view, exports, bug-report prefill, Playwright intent comments, baseline eval scores (§10–§11, §13.3, §14)
+- [x] 26.1 Setup view: goal textarea; mode radio (Observe only / Confirm actions [default] / Autonomous), Autonomous gated by an extra "I understand" checkbox without which Start stays disabled; max-steps slider (5–60, default 25); origin allowlist prefilled with the active tab's origin; Start dispatches `AUTO_START {config}`
+- [x] 26.2 "Use a suggested test case" picker: prefills the goal from a suggest-mode test case as `Test: <title>. Steps: <numbered steps>. Expected: <expectations>` (expectations become natural `assert` targets)
+- [x] 26.3 Credentials editor polish (replaces the 22.3 stub): name → value rows written directly to the session vault (`chrome.storage.session` key `autoVault` — M4 note: values never transit messaging), masked after entry, row removal + clear-all
+- [x] 26.4 Unit tests: Autonomous requires the ack to start; picker prefill format; credential values masked and stored only in `storage.session`
+
+## 27. Run view: live timeline + confirmation modal (§10)
+
+- [x] 27.1 Status pill and budget bars (steps used / max, elapsed / max wall clock) driven by pushed `AUTO_STATE`
+- [x] 27.2 Live `TraceStep` timeline: `#n [icon] intent — action summary → result`; assert steps get ✅/❌ chips; `report_defect` steps get a red defect card
+- [x] 27.3 Confirmation modal (replaces the 23.2 stub): action summary + target element text, Approve / Reject-with-note, visible 120 s countdown (the SW still owns the timeout); Pause / Resume / Stop controls
+- [x] 27.4 Unit tests: timeline rendering per result type (ok / failed / refused / rejected_by_user / confirmed_by_user), confirmation modal `AUTO_CONFIRMATION` round-trip, countdown display
+
+## 28. Result view + per-run metrics (§10, §12)
+
+- [x] 28.1 Accumulate per-run metrics into `RunResult` at finalize (extends 24.1): steps, LLM calls, correction turns, refusals, confirmations, wall clock, outcome — sourced from the trace + `BudgetSnapshot` counters
+- [x] 28.2 Result view: outcome banner, defect list, assertion summary (n passed / n failed), metrics panel
+- [x] 28.3 Runs reviewable after the fact: surface sessions carrying `autoRunResult` (M4 note) so the result view re-opens from a persisted session after browser restart
+- [x] 28.4 Unit tests: metrics accumulate correctly (incl. `stopped_by_budget` partial data); result view renders from a persisted session
+
+## 29. Generator integration (§11)
+
+- [x] 29.1 Timeline UI: small ⚙ badge on events tagged `source:'auto'` (single CSS/label change)
+- [x] 29.2 Playwright generator: emit `// intent: …` comments above steps when `intent` is present (additive, behind the generator's existing options if any)
+- [x] 29.3 Bug-report generator: optional `defect` prefill payload `{summary, expected, actual, traceExcerpt}`; defect card "Generate bug report" opens the generator prefilled
+- [x] 29.4 Result-view export buttons wired into the existing features: Export session JSON, Generate Playwright draft, Generate bug report
+- [x] 29.5 Unit tests: intent comments emitted; prefill payload mapped; existing generator suites pass unchanged (contracts untouched)
+
+## 30. Model-quality eval harness (§13.3, non-CI)
+
+- [x] 30.1 Seeded-bug fixture set (≥ 10 bugs: broken validation, dead button, 500 on save, wrong redirect, label/field mismatch, error toast never clears, …) on the existing fixture server
+- [x] 30.2 Eval runner: N real-LLM runs per configured provider over the seeded fixtures, scoring bugs-found / steps-used / false-defects from traces + `RunResult`s
+- [ ] 30.3 Store scores keyed by prompt version under `eval/results/`; record baseline scores for a cloud provider and the local model (mirroring the M3 acceptance setup)
+
+## 31. M5 acceptance + rollout (§14, §12)
+
+- [x] 31.1 Panel-driven E2E demo run (stub decider for determinism): setup → run → result through the real Auto tab UI, producing a defect card
+- [x] 31.2 Acceptance: the defect card one-click-generates a prefilled bug report, and the run's Playwright draft replays green against the fixture
+- [x] 31.3 Flip `autoTestMode` ON for the store build once acceptance passes (§12) and record it in the implementation notes
+- [ ] 31.4 Run full validation checklist (lint incl. boundary rule, CI grep, unit + smoke + E2E suites green)

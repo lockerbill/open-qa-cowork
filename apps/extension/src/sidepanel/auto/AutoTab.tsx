@@ -1,14 +1,34 @@
 /**
- * Minimal Auto tab (M2/M4, auto-test-mode-spec §10): enough surface to start,
- * pause, resume, and stop a run, seed the credential vault, answer
- * confirmation requests, and watch status/trace live — the dev and E2E entry
- * point for the orchestrator. The full setup/run/result UI (suggested-case
- * picker, budget bars, exports, modal polish) lands in M5.
+ * Auto tab (auto-test-mode-spec §10): setup view (goal, suggested-case
+ * picker, mode + autonomous ack, max-steps slider, origin allowlist,
+ * credentials editor), run view (status pill, budget bars, live timeline,
+ * confirmation modal, pause/resume/stop), and result view (outcome banner,
+ * defects, assertion summary, metrics, exports into existing generators).
+ *
+ * Rendering-free logic lives in setup-logic / run-view-logic / result-logic /
+ * vault so it stays unit-testable without React.
  */
-import { useCallback, useEffect, useState } from 'react';
-import type { RunConfig, RunMode } from '@qa-copilot/shared/auto';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { RunMode, RunResult } from '@qa-copilot/shared/auto';
 import { RUN_DEFAULTS } from '@qa-copilot/shared/auto';
 import type { AutoStateMsg } from '../../background/auto/messages.js';
+import type { PanelState } from '../../shared/messages.js';
+import { downloadJson } from '../exports.js';
+import {
+  buildRunConfig,
+  formatSuggestedGoal,
+  parseOrigins,
+  startBlocker,
+  type SuggestedCase,
+} from './setup-logic.js';
+import { budgetBars, summarizeAction, toTimelineRow } from './run-view-logic.js';
+import {
+  assertionSummary,
+  buildDefectPrefill,
+  metricsRows,
+  type DefectPrefill,
+} from './result-logic.js';
+import { addCredential, clearCredentials, listCredentialNames, removeCredential } from './vault.js';
 
 interface StartResponse {
   ok: boolean;
@@ -16,11 +36,203 @@ interface StartResponse {
   error?: string;
 }
 
-/** chrome.storage.session key shared with the SW's readVault (wiring.ts). */
-const VAULT_KEY = 'autoVault';
-
 function sendAuto<T = { ok: boolean }>(message: Record<string, unknown>): Promise<T> {
   return chrome.runtime.sendMessage(message) as Promise<T>;
+}
+
+const ACTIVE_STATUSES = ['running', 'paused', 'awaiting_confirmation'] as const;
+
+export interface AutoTabProps {
+  state: PanelState;
+  /** Picker source (§10): from the last analyze/test-cases results. */
+  suggestedCases: SuggestedCase[];
+  /** Defect card → open the existing bug-report generator prefilled (§11). */
+  onGenerateBugReport: (defect: DefectPrefill) => void;
+  /** Result-view buttons that land in the existing Generate tab (§10). */
+  onOpenGenerate: () => void;
+}
+
+export function AutoTab({ state, suggestedCases, onGenerateBugReport, onOpenGenerate }: AutoTabProps) {
+  const [run, setRun] = useState<AutoStateMsg | null>(null);
+  const [dismissedSession, setDismissedSession] = useState<string | null>(null);
+
+  useEffect(() => {
+    void sendAuto<{ ok: boolean; state: AutoStateMsg | null }>({ type: 'AUTO_GET_STATE' }).then(
+      (res) => {
+        if (res?.state) setRun(res.state);
+      },
+    );
+    const listener = (msg: { type?: string }) => {
+      if (msg?.type === 'AUTO_STATE') setRun(msg as AutoStateMsg);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, []);
+
+  const active =
+    run !== null && (ACTIVE_STATUSES as readonly string[]).includes(run.status);
+  const result = state.session.autoRunResult;
+  const showResult = !active && result !== undefined && state.session.id !== dismissedSession;
+
+  return (
+    <div className="auto-tab section">
+      <h3>Auto Test</h3>
+      {active && run ? (
+        <RunView run={run} />
+      ) : showResult && result ? (
+        <ResultView
+          result={result}
+          session={state.session}
+          onGenerateBugReport={onGenerateBugReport}
+          onOpenGenerate={onOpenGenerate}
+          onNewRun={() => setDismissedSession(state.session.id)}
+        />
+      ) : (
+        <SetupView activeOrigin={state.activeOrigin} suggestedCases={suggestedCases} />
+      )}
+    </div>
+  );
+}
+
+// --- Setup view (§10) --------------------------------------------------------
+
+function SetupView({
+  activeOrigin,
+  suggestedCases,
+}: {
+  activeOrigin: string | null;
+  suggestedCases: SuggestedCase[];
+}) {
+  const [goal, setGoal] = useState('');
+  const [mode, setMode] = useState<RunMode>('confirm');
+  const [ackAutonomous, setAckAutonomous] = useState(false);
+  const [maxSteps, setMaxSteps] = useState<number>(RUN_DEFAULTS.maxSteps);
+  const [originsText, setOriginsText] = useState('');
+  const [deciderUrl, setDeciderUrl] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  // Prefill the allowlist with the active tab's origin (§10).
+  useEffect(() => {
+    if (activeOrigin) setOriginsText((text) => (text.trim() ? text : activeOrigin));
+  }, [activeOrigin]);
+
+  const origins = useMemo(() => parseOrigins(originsText), [originsText]);
+  const blocker = startBlocker({ goal, mode, ackAutonomous, maxSteps, origins });
+
+  const start = useCallback(async () => {
+    setError(null);
+    const config = buildRunConfig({ goal, mode, ackAutonomous, maxSteps, origins }, deciderUrl);
+    const res = await sendAuto<StartResponse>({ type: 'AUTO_START', config });
+    if (!res.ok) setError(res.error ?? 'Failed to start run.');
+  }, [goal, mode, ackAutonomous, maxSteps, origins, deciderUrl]);
+
+  return (
+    <div className="auto-setup">
+      <label>
+        Goal
+        <textarea
+          rows={3}
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="e.g. Log in and create an item"
+        />
+      </label>
+
+      {suggestedCases.length > 0 && (
+        <label>
+          Use a suggested test case
+          <select
+            value=""
+            onChange={(e) => {
+              const picked = suggestedCases[Number(e.target.value)];
+              if (picked) setGoal(formatSuggestedGoal(picked));
+            }}
+          >
+            <option value="">— pick to prefill the goal —</option>
+            {suggestedCases.map((c, i) => (
+              <option key={i} value={i}>
+                {c.title}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      <fieldset className="auto-mode">
+        <legend>Mode</legend>
+        {(
+          [
+            ['observe_only', 'Observe only'],
+            ['confirm', 'Confirm actions'],
+            ['autonomous', 'Autonomous'],
+          ] as const
+        ).map(([value, label]) => (
+          <label key={value} className="auto-radio">
+            <input
+              type="radio"
+              name="auto-mode"
+              value={value}
+              checked={mode === value}
+              onChange={() => setMode(value)}
+            />
+            {label}
+          </label>
+        ))}
+        {mode === 'autonomous' && (
+          <label className="auto-radio warn">
+            <input
+              type="checkbox"
+              checked={ackAutonomous}
+              onChange={(e) => setAckAutonomous(e.target.checked)}
+            />
+            I understand: actions (including destructive ones) run without confirmation.
+          </label>
+        )}
+      </fieldset>
+
+      <label>
+        Max steps: <b>{maxSteps}</b>
+        <input
+          type="range"
+          min={5}
+          max={RUN_DEFAULTS.maxStepsHardCap}
+          value={maxSteps}
+          onChange={(e) => setMaxSteps(Number(e.target.value))}
+        />
+      </label>
+
+      <label>
+        Allowed origins (one per line)
+        <textarea
+          rows={2}
+          value={originsText}
+          onChange={(e) => setOriginsText(e.target.value)}
+          placeholder="https://staging.example.com"
+        />
+      </label>
+      {originsText.trim() && origins.length === 0 && (
+        <div className="warn">No valid origins — enter full URLs (https://…).</div>
+      )}
+
+      <CredentialsEditor />
+
+      <label>
+        Decider URL (dev override)
+        <input
+          type="text"
+          value={deciderUrl}
+          onChange={(e) => setDeciderUrl(e.target.value)}
+          placeholder="defaults to backend URL"
+        />
+      </label>
+
+      <button className="primary" disabled={blocker !== null} onClick={() => void start()}>
+        Start run
+      </button>
+      {blocker && <div className="muted">{blocker}</div>}
+      {error && <div className="warn">{error}</div>}
+    </div>
+  );
 }
 
 /**
@@ -35,31 +247,14 @@ function CredentialsEditor() {
   const [value, setValue] = useState('');
 
   useEffect(() => {
-    void chrome.storage.session.get(VAULT_KEY).then((stored) => {
-      const vault = stored[VAULT_KEY] as Record<string, string> | undefined;
-      setNames(Object.keys(vault ?? {}));
-    });
+    void listCredentialNames().then(setNames);
   }, []);
 
   const add = useCallback(async () => {
-    const trimmed = name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-    if (!trimmed || !value) return;
-    const stored = await chrome.storage.session.get(VAULT_KEY);
-    const vault = { ...((stored[VAULT_KEY] as Record<string, string> | undefined) ?? {}) };
-    vault[trimmed] = value;
-    await chrome.storage.session.set({ [VAULT_KEY]: vault });
-    setNames(Object.keys(vault));
+    setNames(await addCredential(name, value));
     setName('');
     setValue('');
   }, [name, value]);
-
-  const remove = useCallback(async (target: string) => {
-    const stored = await chrome.storage.session.get(VAULT_KEY);
-    const vault = { ...((stored[VAULT_KEY] as Record<string, string> | undefined) ?? {}) };
-    delete vault[target];
-    await chrome.storage.session.set({ [VAULT_KEY]: vault });
-    setNames(Object.keys(vault));
-  }, []);
 
   return (
     <div className="auto-credentials">
@@ -68,7 +263,9 @@ function CredentialsEditor() {
         {names.map((n) => (
           <li key={n}>
             <code>{`{{${n}}}`}</code> ••••••{' '}
-            <button onClick={() => void remove(n)}>Remove</button>
+            <button className="ghost" onClick={() => void removeCredential(n).then(setNames)}>
+              Remove
+            </button>
           </li>
         ))}
       </ul>
@@ -85,26 +282,98 @@ function CredentialsEditor() {
           value={value}
           onChange={(e) => setValue(e.target.value)}
         />
-        <button onClick={() => void add()} disabled={!name.trim() || !value}>
+        <button className="ghost" onClick={() => void add()} disabled={!name.trim() || !value}>
           Add
         </button>
+        {names.length > 0 && (
+          <button className="ghost" onClick={() => void clearCredentials().then(setNames)}>
+            Clear all
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-/** Human-readable one-liner of the action awaiting confirmation. */
-function summarizeAction(action: Record<string, unknown>): string {
-  const parts: string[] = [String(action.type)];
-  if (typeof action.index === 'number') parts.push(`[${action.index}]`);
-  if (typeof action.value === 'string') parts.push(JSON.stringify(action.value));
-  if (typeof action.url === 'string') parts.push(String(action.url));
-  if (typeof action.intent === 'string') parts.push(`— ${action.intent}`);
-  return parts.join(' ');
+// --- Run view (§10) ----------------------------------------------------------
+
+function RunView({ run }: { run: AutoStateMsg }) {
+  return (
+    <div className="auto-run">
+      <div className="row">
+        <span className={`chip ${run.status === 'paused' ? '' : 'rec'}`}>{run.status}</span>
+        {run.detail && <span className="muted">{run.detail}</span>}
+      </div>
+
+      {budgetBars(run.budgets).map((bar) => (
+        <div key={bar.label} className="budget">
+          <span className="budget-label">
+            {bar.label} {bar.used}/{bar.max}
+          </span>
+          <div className="budget-track">
+            <div className="budget-fill" style={{ width: `${bar.pct}%` }} />
+          </div>
+        </div>
+      ))}
+
+      <div className="auto-controls row">
+        {run.status === 'paused' ? (
+          <button
+            className="primary"
+            onClick={() => void sendAuto({ type: 'AUTO_RESUME', runId: run.runId })}
+          >
+            Resume
+          </button>
+        ) : (
+          <button
+            className="ghost"
+            onClick={() => void sendAuto({ type: 'AUTO_PAUSE', runId: run.runId })}
+          >
+            Pause
+          </button>
+        )}
+        <button className="ghost" onClick={() => void sendAuto({ type: 'AUTO_STOP', runId: run.runId })}>
+          Stop
+        </button>
+      </div>
+
+      <Timeline run={run} />
+
+      {run.status === 'awaiting_confirmation' && run.pendingConfirmation && (
+        <ConfirmationModal run={run} />
+      )}
+    </div>
+  );
 }
 
-/** Confirmation prompt (§9.3, §10): Approve / Reject-with-note + countdown. */
-function ConfirmationPrompt({ run }: { run: AutoStateMsg }) {
+/** Live TraceStep timeline: `#n [icon] intent — action summary → result` (§10). */
+function Timeline({ run }: { run: AutoStateMsg }) {
+  return (
+    <ol className="auto-trace">
+      {run.trace.map(toTimelineRow).map((row) => (
+        <li key={row.step}>
+          <span className="muted">#{row.step}</span> {row.icon}{' '}
+          {row.intent && <>{row.intent} — </>}
+          <code>{row.summary}</code>
+          {row.destructive ? ' ⚠' : ''} → {row.result}
+          {row.assertChip && (
+            <span className={`chip ${row.assertChip === 'pass' ? 'ok' : 'rec'}`}>
+              {row.assertChip === 'pass' ? '✅ pass' : '❌ fail'}
+            </span>
+          )}
+          {row.defect && (
+            <div className="defect-card">
+              <b>🐞 {row.defect.severity}:</b> {row.defect.summary}
+            </div>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Confirmation modal (§9.3, §10): Approve / Reject-with-note + 120 s countdown. */
+function ConfirmationModal({ run }: { run: AutoStateMsg }) {
   const pending = run.pendingConfirmation!;
   const [note, setNote] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(
@@ -127,164 +396,131 @@ function ConfirmationPrompt({ run }: { run: AutoStateMsg }) {
     });
 
   return (
-    <div className="auto-confirmation" role="alertdialog" aria-label="Confirm action">
-      <b>Confirm action</b> ({secondsLeft}s — no answer rejects)
-      <div>
-        <code>{summarizeAction(pending.action)}</code>
-        {pending.elementText ? ` on “${pending.elementText}”` : ''}
-      </div>
-      <div className="warn">{pending.reason}</div>
-      <textarea
-        rows={2}
-        placeholder="Optional note (recorded on reject)"
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-      />
-      <div className="auto-controls">
-        <button onClick={() => respond(true)}>Approve</button>
-        <button onClick={() => respond(false)}>Reject</button>
+    <div className="modal-backdrop">
+      <div className="modal" role="alertdialog" aria-label="Confirm action">
+        <b>Confirm action</b>
+        <div className="muted">{secondsLeft}s — no answer rejects</div>
+        <div style={{ margin: '6px 0' }}>
+          <code>{summarizeAction(pending.action)}</code>
+          {pending.elementText ? (
+            <>
+              {' '}
+              on “<b>{pending.elementText}</b>”
+            </>
+          ) : null}
+        </div>
+        <div className="warn">{pending.reason}</div>
+        <textarea
+          rows={2}
+          placeholder="Optional note (recorded on reject)"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+        <div className="row" style={{ marginTop: 6 }}>
+          <button className="primary" onClick={() => respond(true)}>
+            Approve
+          </button>
+          <button className="ghost" onClick={() => respond(false)}>
+            Reject
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-export function AutoTab({ activeOrigin }: { activeOrigin: string | null }) {
-  const [goal, setGoal] = useState('');
-  const [mode, setMode] = useState<RunMode>('confirm');
-  const [maxSteps, setMaxSteps] = useState<number>(RUN_DEFAULTS.maxSteps);
-  const [deciderUrl, setDeciderUrl] = useState('');
-  const [run, setRun] = useState<AutoStateMsg | null>(null);
-  const [error, setError] = useState<string | null>(null);
+// --- Result view (§10, §12) --------------------------------------------------
 
-  useEffect(() => {
-    void sendAuto<{ ok: boolean; state: AutoStateMsg | null }>({ type: 'AUTO_GET_STATE' }).then(
-      (res) => {
-        if (res?.state) setRun(res.state);
-      },
-    );
-    const listener = (msg: { type?: string }) => {
-      if (msg?.type === 'AUTO_STATE') setRun(msg as AutoStateMsg);
-    };
-    chrome.runtime.onMessage.addListener(listener);
-    return () => chrome.runtime.onMessage.removeListener(listener);
-  }, []);
-
-  const running = run !== null && (run.status === 'running' || run.status === 'paused' || run.status === 'awaiting_confirmation');
-
-  const start = useCallback(async () => {
-    setError(null);
-    if (!goal.trim()) {
-      setError('Enter a goal first.');
-      return;
-    }
-    if (!activeOrigin) {
-      setError('No active tab origin to run against.');
-      return;
-    }
-    const config: RunConfig = {
-      goal: goal.trim(),
-      mode,
-      maxSteps,
-      maxWallClockMs: RUN_DEFAULTS.maxWallClockMs,
-      maxLlmCalls: maxSteps + 10,
-      originAllowlist: [activeOrigin],
-      ...(deciderUrl.trim() && { deciderBaseUrl: deciderUrl.trim() }),
-    };
-    const res = await sendAuto<StartResponse>({ type: 'AUTO_START', config });
-    if (!res.ok) setError(res.error ?? 'Failed to start run.');
-  }, [goal, mode, maxSteps, deciderUrl, activeOrigin]);
+function ResultView({
+  result,
+  session,
+  onGenerateBugReport,
+  onOpenGenerate,
+  onNewRun,
+}: {
+  result: RunResult;
+  session: PanelState['session'];
+  onGenerateBugReport: (defect: DefectPrefill) => void;
+  onOpenGenerate: () => void;
+  onNewRun: () => void;
+}) {
+  const asserts = assertionSummary(result);
+  const banner =
+    result.outcome ?? (result.status === 'finished' ? 'pass' : result.status.replace(/_/g, ' '));
+  const bannerClass =
+    result.outcome === 'pass' ? 'ok' : result.outcome === 'fail' ? 'rec' : '';
 
   return (
-    <div className="auto-tab">
-      <h3>Auto Test (experimental)</h3>
+    <div className="auto-result">
+      <div className="row">
+        <span className={`chip ${bannerClass}`}>
+          {banner}
+          {result.reason ? ` — ${result.reason}` : ''}
+        </span>
+      </div>
 
-      {!running && (
-        <div className="auto-setup">
-          <label>
-            Goal
-            <textarea
-              rows={3}
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="e.g. Log in and create an item"
-            />
-          </label>
-          <label>
-            Mode
-            <select value={mode} onChange={(e) => setMode(e.target.value as RunMode)}>
-              <option value="observe_only">Observe only</option>
-              <option value="confirm">Confirm actions</option>
-              <option value="autonomous">Autonomous</option>
-            </select>
-          </label>
-          <label>
-            Max steps
-            <input
-              type="number"
-              min={5}
-              max={RUN_DEFAULTS.maxStepsHardCap}
-              value={maxSteps}
-              onChange={(e) => setMaxSteps(Number(e.target.value) || RUN_DEFAULTS.maxSteps)}
-            />
-          </label>
-          <label>
-            Decider URL (dev override)
-            <input
-              type="text"
-              value={deciderUrl}
-              onChange={(e) => setDeciderUrl(e.target.value)}
-              placeholder="defaults to backend URL"
-            />
-          </label>
-          <CredentialsEditor />
-          <button onClick={() => void start()}>Start run</button>
-        </div>
-      )}
-
-      {error && <div className="warn">{error}</div>}
-
-      {run && (
-        <div className="auto-run">
-          <div>
-            <b>Status:</b> {run.status}
-            {run.detail ? ` — ${run.detail}` : ''}
-            {run.outcome ? ` (${run.outcome}${run.reason ? `: ${run.reason}` : ''})` : ''}
-          </div>
-          <div>
-            Steps {run.budgets.stepsUsed}/{run.budgets.maxSteps} · LLM calls{' '}
-            {run.budgets.llmCalls}/{run.budgets.maxLlmCalls}
-          </div>
-          {run.status === 'awaiting_confirmation' && run.pendingConfirmation && (
-            <ConfirmationPrompt run={run} />
-          )}
-          {running && (
-            <div className="auto-controls">
-              {run.status === 'paused' ? (
-                <button onClick={() => void sendAuto({ type: 'AUTO_RESUME', runId: run.runId })}>
-                  Resume
-                </button>
-              ) : (
-                <button onClick={() => void sendAuto({ type: 'AUTO_PAUSE', runId: run.runId })}>
-                  Pause
-                </button>
-              )}
-              <button onClick={() => void sendAuto({ type: 'AUTO_STOP', runId: run.runId })}>
-                Stop
+      {result.defects.length > 0 && (
+        <>
+          <h3>Defects</h3>
+          {result.defects.map((defect, i) => (
+            <div key={i} className="defect-card">
+              <div>
+                <b>🐞 {defect.severity}:</b> {defect.summary}
+              </div>
+              <div className="muted">
+                Expected: {defect.expected} · Actual: {defect.actual}
+              </div>
+              <button
+                className="ghost"
+                onClick={() => onGenerateBugReport(buildDefectPrefill(result, defect))}
+              >
+                Generate bug report
               </button>
             </div>
-          )}
-          <ol className="auto-trace">
-            {run.trace.map((step) => (
-              <li key={step.step}>
-                <code>{step.action.type}</code>
-                {step.destructive ? ' ⚠' : ''}
-                {step.intent ? ` — ${step.intent}` : ''} → {step.result}
-                {step.resultDetail ? ` (${step.resultDetail})` : ''}
-              </li>
-            ))}
-          </ol>
-        </div>
+          ))}
+        </>
       )}
+
+      <h3>Assertions</h3>
+      <div className="row">
+        <span className="chip ok">{asserts.passed} passed</span>
+        <span className={`chip ${asserts.failed > 0 ? 'rec' : ''}`}>{asserts.failed} failed</span>
+      </div>
+
+      <h3>Metrics</h3>
+      <div className="row">
+        {metricsRows(result).map((row) => (
+          <span key={row.label} className="chip">
+            {row.label}: {row.value}
+          </span>
+        ))}
+      </div>
+
+      <h3>Timeline</h3>
+      <ol className="auto-trace">
+        {result.trace.map(toTimelineRow).map((row) => (
+          <li key={row.step}>
+            <span className="muted">#{row.step}</span> {row.icon}{' '}
+            {row.intent && <>{row.intent} — </>}
+            <code>{row.summary}</code> → {row.result}
+          </li>
+        ))}
+      </ol>
+
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="ghost" onClick={() => downloadJson(`${session.id}.json`, session)}>
+          Export session JSON
+        </button>
+        <button className="ghost" onClick={onOpenGenerate}>
+          Generate Playwright draft
+        </button>
+        <button className="ghost" onClick={onOpenGenerate}>
+          Generate bug report
+        </button>
+        <button className="primary" onClick={onNewRun}>
+          New run
+        </button>
+      </div>
     </div>
   );
 }
