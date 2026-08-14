@@ -13,6 +13,46 @@ Defined in `apps/server/src/app.ts`:
 - `POST /api/generate/playwright` — returns a TypeScript spec, generated deterministically first and optionally enriched by the model.
 - `POST /api/chat` — returns raw chat text for the general chat tab.
 
+These legacy routes are unauthenticated and stateless. They stay because they are the signed-out fallback: `apps/extension/src/sidepanel/backend.ts` calls the workspace gateway first and drops back to these whenever the user is signed out, the token is stale, or the workspace has no provider configured.
+
+## Platform routes
+
+Mounted only when the platform is configured (`DATABASE_URL`, `JWT_SECRET`, `MASTER_ENCRYPTION_KEY`). All are authenticated and RBAC-checked.
+
+Called by the extension today:
+
+| Route | Module |
+| --- | --- |
+| `POST /api/auth/register` | `modules/auth/routes.ts` |
+| `POST /api/auth/login` | `modules/auth/routes.ts` |
+| `GET /api/workspaces` | `modules/workspaces/routes.ts` |
+| `GET /api/workspaces/:workspaceId/projects` | `modules/projects/routes.ts` |
+| `GET /api/workspaces/:workspaceId/projects/:projectId/environments` | `modules/projects/routes.ts` |
+| `GET /api/workspaces/:workspaceId/resolve` | `modules/projects/routes.ts` |
+| `GET /api/workspaces/:workspaceId/llm-providers` | `modules/providers/routes.ts` |
+| `POST /api/workspaces/:workspaceId/llm-providers` | `modules/providers/routes.ts` |
+| `POST /api/workspaces/:workspaceId/llm-providers/:providerId/validate` | `modules/providers/routes.ts` |
+| `POST /api/workspaces/:workspaceId/llm-providers/:providerId/set-default` | `modules/providers/routes.ts` |
+| `POST /api/workspaces/:workspaceId/ai/tasks/*` | `modules/ai-tasks/routes.ts` |
+| `POST /api/workspaces/:workspaceId/auto/step` | `modules/auto/routes.ts` |
+
+**No in-repo client yet.** The routes below are implemented and covered by tests, but nothing in this repository calls them — there is no admin UI. They are not dead code and should not be deleted; they are the surface an admin client or a curl-driven setup script would use.
+
+| Route | Module |
+| --- | --- |
+| `GET /api/auth/me` | `modules/auth/routes.ts` |
+| `POST /api/workspaces` | `modules/workspaces/routes.ts` |
+| `GET /api/workspaces/:workspaceId` | `modules/workspaces/routes.ts` |
+| `POST /api/workspaces/:workspaceId/members/invite` | `modules/workspaces/routes.ts` |
+| `POST /api/workspaces/:workspaceId/members/accept` | `modules/workspaces/routes.ts` |
+| `POST /api/workspaces/:workspaceId/members/decline` | `modules/workspaces/routes.ts` |
+| `POST /api/workspaces/:workspaceId/projects` | `modules/projects/routes.ts` |
+| `GET /api/workspaces/:workspaceId/projects/:projectId` | `modules/projects/routes.ts` |
+| `PATCH /api/workspaces/:workspaceId/projects/:projectId` | `modules/projects/routes.ts` |
+| `POST /api/workspaces/:workspaceId/projects/:projectId/environments` | `modules/projects/routes.ts` |
+| `PATCH /api/workspaces/:workspaceId/llm-providers/:providerId` | `modules/providers/routes.ts` |
+| `POST /api/workspaces/:workspaceId/llm-providers/:providerId/rotate-secret` | `modules/providers/routes.ts` |
+
 ## Prompt behavior
 
 Prompt templates live in `apps/server/src/prompts/index.ts`.

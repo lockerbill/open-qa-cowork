@@ -5,13 +5,6 @@
  * panel; these defaults ship in shared.
  */
 
-export interface DestructivePolicy {
-  /** Matched against element text + aria-label + title, lowercase. */
-  patterns: RegExp[];
-  /** Matched against navigate targets. */
-  urlPatterns: RegExp[];
-}
-
 export const DEFAULT_DESTRUCTIVE_PATTERNS: RegExp[] = [
   /\bdelete\b/,
   /\bremove\b/,

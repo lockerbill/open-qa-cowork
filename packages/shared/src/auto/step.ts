@@ -126,8 +126,3 @@ export const zStepRequest = z.object({
   language: z.string().optional(),
   correction: z.string().max(500).optional(),
 });
-
-export const zStepResponse = z.object({
-  action: zAction,
-  modelRaw: z.string().optional(),
-});

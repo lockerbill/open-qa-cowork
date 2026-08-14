@@ -1,6 +1,5 @@
 import {
   isSensitiveField,
-  rankSelectors,
   selectorStrings,
   type ElementInfo,
   type ElementState,
@@ -469,9 +468,4 @@ export function toElementInfo(el: Element, id: string): ElementInfo {
   if (name) info.name = name;
   if (fieldIsSensitive(el)) info.sensitive = true;
   return info;
-}
-
-/** Exposed for tests: the ranked candidates for an element. */
-export function rankedFor(el: Element) {
-  return rankSelectors(selectorInputFor(el));
 }

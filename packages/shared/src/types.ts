@@ -180,67 +180,10 @@ export interface TestSession {
   autoRunResult?: import('./auto/run.js').RunResult;
 }
 
-// --- Generated artifacts (spec §13.5, §9.8, §9.9) --------------------------
+// --- Shared scalars --------------------------------------------------------
 
-export type ArtifactType = 'test_cases' | 'bug_report' | 'playwright_test' | 'page_analysis';
-export type ArtifactFormat = 'markdown' | 'json' | 'typescript';
-export type ReviewStatus = 'draft' | 'reviewed';
-
-export interface GeneratedArtifact {
-  id: string;
-  sessionId?: string;
-  type: ArtifactType;
-  format: ArtifactFormat;
-  content: string;
-  createdAt: string;
-  reviewStatus: ReviewStatus;
-}
-
-export type TestCaseType =
-  | 'functional'
-  | 'negative'
-  | 'accessibility'
-  | 'ui_ux'
-  | 'data'
-  | 'permission';
-
+/** Severity/priority scale shared by reports and the Jira priority mapping. */
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
-export type RiskLevel = 'low' | 'medium' | 'high';
-
-/** spec §9.8 manual test case fields. */
-export interface TestCase {
-  id: string;
-  title: string;
-  preconditions: string[];
-  steps: string[];
-  expectedResult: string;
-  testData?: string;
-  priority: Priority;
-  riskLevel: RiskLevel;
-  type: TestCaseType;
-}
-
-/** spec §9.9 bug report fields. */
-export interface BugReport {
-  title: string;
-  severity: string;
-  priority: string;
-  environment?: string;
-  browser?: string;
-  url?: string;
-  userRole?: string;
-  preconditions: string[];
-  stepsToReproduce: string[];
-  actualResult: string;
-  expectedResult: string;
-  screenshotRefs: string[];
-  consoleErrors: string[];
-  networkFailures: string[];
-  suggestedRootCause?: string;
-  suggestedPlaywright?: string;
-  /** AI assumptions, clearly separated from observed facts (spec §9.9). */
-  assumptions: string[];
-}
 
 // --- External issue tracker (jira-integration spec) -------------------------
 

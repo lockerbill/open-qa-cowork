@@ -66,11 +66,6 @@ export const chatSchema = z.object({
   maxTokens: z.number().int().positive().max(8192).optional(),
 });
 
-export type AnalyzeBody = z.infer<typeof analyzeSchema>;
-export type TestCasesBody = z.infer<typeof testCasesSchema>;
-export type BugReportBody = z.infer<typeof bugReportSchema>;
-export type PlaywrightBody = z.infer<typeof playwrightSchema>;
-
 // --- Multi-user platform schemas ---
 
 const WORKSPACE_ROLE = z.enum(['owner', 'admin', 'qa_lead', 'tester', 'viewer']);
@@ -204,7 +199,6 @@ export const aiChatSchema = z.object({
   ...chatSchema.shape,
   ...aiTaskContextFields,
 });
-export type ChatBody = z.infer<typeof chatSchema>;
 
 /**
  * POST /auto/step body: the shared StepRequest contract plus the layered
@@ -215,4 +209,3 @@ export const autoStepSchema = zStepRequest.extend({
   projectId: z.string().optional(),
   environmentId: z.string().optional(),
 });
-export type AutoStepBody = z.infer<typeof autoStepSchema>;

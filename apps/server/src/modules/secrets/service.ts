@@ -7,28 +7,9 @@ import { ApiError } from '../../http/errors.js';
 import { decryptSecret, encryptSecret } from './encryption.js';
 
 export type Secret = typeof secrets.$inferSelect;
-export type SecretType = 'llm_api_key' | 'jira_refresh_token' | 'generic_api_key';
 
-/** Metadata-only view of a secret — never includes the encrypted or plain value. */
-export interface SecretMeta {
-  id: string;
-  name: string;
-  type: string;
-  createdAt: Date;
-  rotatedAt: Date | null;
-  lastUsedAt: Date | null;
-}
-
-export function toSecretMeta(secret: Secret): SecretMeta {
-  return {
-    id: secret.id,
-    name: secret.name,
-    type: secret.type,
-    createdAt: secret.createdAt,
-    rotatedAt: secret.rotatedAt,
-    lastUsedAt: secret.lastUsedAt,
-  };
-}
+/** Kinds of secret the vault stores. Module-local — no route projects it. */
+type SecretType = 'llm_api_key' | 'jira_refresh_token' | 'generic_api_key';
 
 /** Encrypt and store a secret. Writes a `secret.created` audit event (no value). */
 export async function createSecret(

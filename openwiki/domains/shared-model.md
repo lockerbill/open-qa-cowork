@@ -35,7 +35,7 @@ A `TestSession` stores the manual QA recording:
 
 ### Generated artifacts
 
-A `GeneratedArtifact` describes the output shape returned by the server routes. The artifact type determines whether the content is Markdown, JSON, or TypeScript.
+Generated output is not modelled as a shared type. The generate routes return `{ artifactId, content, format }` directly, where `content` is a string and `format` is `markdown`, `json`, or `typescript`. The extension renders that string and never re-parses it into a structured record.
 
 ## Pure helper layers
 

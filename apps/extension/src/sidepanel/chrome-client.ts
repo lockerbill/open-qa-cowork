@@ -49,11 +49,6 @@ export const jiraSaveConfig = (config: JiraConfig) =>
     type: 'JIRA_SAVE_CONFIG',
     config,
   });
-export const jiraTestConnection = (config: JiraConfig) =>
-  sendToBackground<JiraResponse<{ user: JiraUser; config: JiraConfigProjection }>>({
-    type: 'JIRA_TEST_CONNECTION',
-    config,
-  });
 export const jiraGetCreateMeta = () =>
   sendToBackground<JiraResponse<JiraFieldMeta[]>>({ type: 'JIRA_GET_CREATE_META' });
 export const jiraGetLinks = () =>
