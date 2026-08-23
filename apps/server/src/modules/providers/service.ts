@@ -1,12 +1,12 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { genId } from '../../db/id.js';
-import { llmProviderConfigs, workspaces } from '../../db/schema.js';
+import { llmProviderConfigs, projects, workspaces } from '../../db/schema.js';
 import { writeAudit } from '../../audit/index.js';
 import { ApiError } from '../../http/errors.js';
 import { LLMError } from '../../llm/types.js';
 import { openAICompatibleComplete } from '../../llm/openai-compatible.js';
-import { createSecret, readSecretForUse, rotateSecret } from '../secrets/service.js';
+import { createSecret, deleteSecret, readSecretForUse, rotateSecret } from '../secrets/service.js';
 import { assertSafeProviderUrl } from './ssrf.js';
 
 export type LlmProviderConfig = typeof llmProviderConfigs.$inferSelect;
@@ -49,7 +49,8 @@ export function toPublicConfig(
   };
 }
 
-async function getWorkspaceDefaultId(db: Database, workspaceId: string): Promise<string | null> {
+/** The workspace's current default provider config id, if any. */
+export async function getWorkspaceDefaultId(db: Database, workspaceId: string): Promise<string | null> {
   const [ws] = await db
     .select({ id: workspaces.defaultLlmProviderConfigId })
     .from(workspaces)
@@ -136,7 +137,8 @@ export async function listProviderConfigs(
   const rows = await db
     .select()
     .from(llmProviderConfigs)
-    .where(eq(llmProviderConfigs.workspaceId, workspaceId));
+    .where(eq(llmProviderConfigs.workspaceId, workspaceId))
+    .orderBy(asc(llmProviderConfigs.createdAt), asc(llmProviderConfigs.id));
   return rows.map((r) => toPublicConfig(r, defaultId));
 }
 
@@ -194,12 +196,17 @@ export async function rotateProviderSecret(
   });
 }
 
-/** Set the workspace's default provider config. Writes an audit event. */
+/**
+ * Set the workspace's default provider config. Writes an audit event. Refuses a
+ * disabled config (409) — the AI-task resolver skips disabled configs, so
+ * defaulting to one would make every task fail with `no_provider`.
+ */
 export async function setWorkspaceDefault(
   db: Database,
   params: { workspaceId: string; id: string; actorUserId: string },
 ): Promise<void> {
-  await getProviderConfig(db, params.workspaceId, params.id); // 404 if cross-workspace
+  const config = await getProviderConfig(db, params.workspaceId, params.id); // 404 if cross-workspace
+  if (!config.enabled) throw new ApiError(409, 'Provider is disabled');
   await db
     .update(workspaces)
     .set({ defaultLlmProviderConfigId: params.id, updatedAt: new Date() })
@@ -210,6 +217,53 @@ export async function setWorkspaceDefault(
     action: 'workspace.default_provider_changed',
     resourceType: 'llm_provider_config',
     resourceId: params.id,
+  });
+}
+
+/**
+ * Delete a provider config and its vaulted API key. Clears any workspace or
+ * project default pointer that referenced it. Writes a `llm_provider.deleted`
+ * audit event.
+ */
+export async function deleteProviderConfig(
+  db: Database,
+  params: { workspaceId: string; id: string; actorUserId: string },
+): Promise<void> {
+  const config = await getProviderConfig(db, params.workspaceId, params.id); // 404 if cross-workspace
+  await db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    await tx
+      .update(workspaces)
+      .set({ defaultLlmProviderConfigId: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(workspaces.id, params.workspaceId),
+          eq(workspaces.defaultLlmProviderConfigId, params.id),
+        ),
+      );
+    await tx
+      .update(projects)
+      .set({ defaultLlmProviderConfigId: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(projects.workspaceId, params.workspaceId),
+          eq(projects.defaultLlmProviderConfigId, params.id),
+        ),
+      );
+    await tx.delete(llmProviderConfigs).where(eq(llmProviderConfigs.id, params.id));
+    await deleteSecret(tx, {
+      workspaceId: params.workspaceId,
+      secretId: config.secretId,
+      actorUserId: params.actorUserId,
+    });
+    await writeAudit(tx, {
+      workspaceId: params.workspaceId,
+      actorUserId: params.actorUserId,
+      action: 'llm_provider.deleted',
+      resourceType: 'llm_provider_config',
+      resourceId: params.id,
+      metadata: { displayName: config.displayName },
+    });
   });
 }
 

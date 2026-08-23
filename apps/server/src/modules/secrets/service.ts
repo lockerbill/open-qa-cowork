@@ -86,3 +86,22 @@ export async function rotateSecret(
     resourceId: params.secretId,
   });
 }
+
+/** Permanently remove a secret. Writes a `secret.deleted` audit event (no value). */
+export async function deleteSecret(
+  db: Database,
+  params: { workspaceId: string; secretId: string; actorUserId: string },
+): Promise<void> {
+  const result = await db
+    .delete(secrets)
+    .where(eq(secrets.id, params.secretId))
+    .returning({ id: secrets.id });
+  if (result.length === 0) throw new ApiError(404, 'Secret not found');
+  await writeAudit(db, {
+    workspaceId: params.workspaceId,
+    actorUserId: params.actorUserId,
+    action: 'secret.deleted',
+    resourceType: 'secret',
+    resourceId: params.secretId,
+  });
+}

@@ -5,10 +5,11 @@ import { eq } from 'drizzle-orm';
 import { createApp } from '../../app.js';
 import { createTestDb } from '../../db/testing.js';
 import { createLogger } from '../../logging/logger.js';
-import { secrets } from '../../db/schema.js';
+import { llmProviderConfigs, projects, secrets, workspaces } from '../../db/schema.js';
 import type { Database } from '../../db/client.js';
 import type { CompleteOptions, LLMProvider } from '../../llm/index.js';
 import { addMember } from '../workspaces/service.js';
+import { createProject } from '../projects/service.js';
 
 class MockProvider implements LLMProvider {
   readonly name = 'mock';
@@ -167,6 +168,133 @@ describe('LLM provider config', () => {
     expect(res.status).toBe(400);
   });
 
+  it('lists providers in a stable creation order and marks the chosen default', async () => {
+    const first = (await create()).body.id as string;
+    const second = (
+      await request(app)
+        .post(`/api/workspaces/${workspaceId}/llm-providers`)
+        .set('Authorization', bearer(ownerToken))
+        .send({ ...providerBody, displayName: 'Second' })
+    ).body.id as string;
+
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/llm-providers/${second}/set-default`)
+      .set('Authorization', bearer(ownerToken));
+    // Touch the first row after the second was defaulted — order must not change.
+    await request(app)
+      .patch(`/api/workspaces/${workspaceId}/llm-providers/${first}`)
+      .set('Authorization', bearer(ownerToken))
+      .send({ displayName: 'First (renamed)' });
+
+    const list = await request(app)
+      .get(`/api/workspaces/${workspaceId}/llm-providers`)
+      .set('Authorization', bearer(ownerToken));
+    expect(list.body.providers.map((p: { id: string }) => p.id)).toEqual([first, second]);
+    expect(list.body.providers.map((p: { isWorkspaceDefault: boolean }) => p.isWorkspaceDefault)).toEqual([
+      false,
+      true,
+    ]);
+  });
+
+  it('refuses to set a disabled provider as the workspace default', async () => {
+    const id = (await create()).body.id as string;
+    const disabled = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/llm-providers/${id}`)
+      .set('Authorization', bearer(ownerToken))
+      .send({ enabled: false });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.enabled).toBe(false);
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/llm-providers/${id}/set-default`)
+      .set('Authorization', bearer(ownerToken));
+    expect(res.status).toBe(409);
+  });
+
+  it('updates fields and reports isWorkspaceDefault on the PATCH response', async () => {
+    const id = (await create()).body.id as string;
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/llm-providers/${id}/set-default`)
+      .set('Authorization', bearer(ownerToken));
+
+    const res = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/llm-providers/${id}`)
+      .set('Authorization', bearer(ownerToken))
+      .send({ displayName: 'Renamed', modelName: 'openai/gpt-4o-mini' });
+    expect(res.status).toBe(200);
+    expect(res.body.displayName).toBe('Renamed');
+    expect(res.body.modelName).toBe('openai/gpt-4o-mini');
+    expect(res.body.isWorkspaceDefault).toBe(true);
+  });
+
+  it('rotates the API key without returning it', async () => {
+    const id = (await create()).body.id as string;
+    const [before] = await db.select().from(secrets).where(eq(secrets.workspaceId, workspaceId));
+
+    const res = await request(app)
+      .post(`/api/workspaces/${workspaceId}/llm-providers/${id}/rotate-secret`)
+      .set('Authorization', bearer(ownerToken))
+      .send({ apiKey: 'sk-new-key-123' });
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain('sk-new-key-123');
+
+    const [after] = await db.select().from(secrets).where(eq(secrets.workspaceId, workspaceId));
+    expect(after!.encryptedValue).not.toBe(before!.encryptedValue);
+    expect(after!.encryptedValue).not.toContain('sk-new-key-123');
+    expect(after!.rotatedAt).not.toBeNull();
+  });
+
+  it('deletes a provider, its secret, and clears workspace/project default pointers', async () => {
+    const id = (await create()).body.id as string;
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/llm-providers/${id}/set-default`)
+      .set('Authorization', bearer(ownerToken));
+    const me = await request(app).get('/api/auth/me').set('Authorization', bearer(ownerToken));
+    const project = await createProject(db, {
+      workspaceId,
+      actorUserId: me.body.user.id,
+      name: 'ERP',
+      key: 'ERP',
+      defaultLlmProviderConfigId: id,
+    });
+
+    const res = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/llm-providers/${id}`)
+      .set('Authorization', bearer(ownerToken));
+    expect(res.status).toBe(204);
+
+    expect(await db.select().from(llmProviderConfigs)).toHaveLength(0);
+    expect(await db.select().from(secrets).where(eq(secrets.workspaceId, workspaceId))).toHaveLength(0);
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+    expect(ws!.defaultLlmProviderConfigId).toBeNull();
+    const [proj] = await db.select().from(projects).where(eq(projects.id, project.id));
+    expect(proj!.defaultLlmProviderConfigId).toBeNull();
+
+    const list = await request(app)
+      .get(`/api/workspaces/${workspaceId}/llm-providers`)
+      .set('Authorization', bearer(ownerToken));
+    expect(list.body.providers).toHaveLength(0);
+  });
+
+  it('forbids a tester from editing or deleting a provider', async () => {
+    const id = (await create()).body.id as string;
+    const testerReg = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'po-tester2@example.com', password: 'password123' });
+    await addMember(db, { workspaceId, userId: testerReg.body.user.id, role: 'tester' });
+    const testerToken = testerReg.body.token as string;
+
+    const patch = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/llm-providers/${id}`)
+      .set('Authorization', bearer(testerToken))
+      .send({ displayName: 'nope' });
+    expect(patch.status).toBe(403);
+    const del = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/llm-providers/${id}`)
+      .set('Authorization', bearer(testerToken));
+    expect(del.status).toBe(403);
+  });
+
   it('blocks cross-workspace provider access', async () => {
     const created = await create();
     const id = created.body.id as string;
@@ -181,5 +309,10 @@ describe('LLM provider config', () => {
       .post(`/api/workspaces/${otherWs}/llm-providers/${id}/validate`)
       .set('Authorization', bearer(otherToken));
     expect(res.status).toBe(404);
+
+    const del = await request(app)
+      .delete(`/api/workspaces/${otherWs}/llm-providers/${id}`)
+      .set('Authorization', bearer(otherToken));
+    expect(del.status).toBe(404);
   });
 });

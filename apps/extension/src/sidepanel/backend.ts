@@ -63,6 +63,7 @@ async function api<T>(
     }
     throw new ApiClientError(res.status, message, code);
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -193,6 +194,53 @@ export function validateProvider(
   return api(backendUrl, `/api/workspaces/${workspaceId}/llm-providers/${providerId}/validate`, {
     token,
     method: 'POST',
+  });
+}
+
+export type ProviderPatch = Partial<{
+  displayName: string;
+  baseUrl: string;
+  modelName: string;
+  enabled: boolean;
+}>;
+
+export function updateProvider(
+  backendUrl: string,
+  token: string,
+  workspaceId: string,
+  providerId: string,
+  patch: ProviderPatch,
+): Promise<ProviderConfigView> {
+  return api(backendUrl, `/api/workspaces/${workspaceId}/llm-providers/${providerId}`, {
+    token,
+    method: 'PATCH',
+    body: patch,
+  });
+}
+
+export function rotateProviderSecret(
+  backendUrl: string,
+  token: string,
+  workspaceId: string,
+  providerId: string,
+  apiKey: string,
+): Promise<{ ok: boolean }> {
+  return api(backendUrl, `/api/workspaces/${workspaceId}/llm-providers/${providerId}/rotate-secret`, {
+    token,
+    method: 'POST',
+    body: { apiKey },
+  });
+}
+
+export function deleteProvider(
+  backendUrl: string,
+  token: string,
+  workspaceId: string,
+  providerId: string,
+): Promise<void> {
+  return api(backendUrl, `/api/workspaces/${workspaceId}/llm-providers/${providerId}`, {
+    token,
+    method: 'DELETE',
   });
 }
 

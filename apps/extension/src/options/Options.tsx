@@ -13,11 +13,14 @@ import { requestJiraOrigin } from '../integrations/jira/auth.js';
 import {
   ApiClientError,
   createProvider,
+  deleteProvider,
   listProviders,
   listWorkspaces,
   login,
   register,
+  rotateProviderSecret,
   setDefaultProvider,
+  updateProvider,
   validateProvider,
   type ProviderConfigView,
 } from '../sidepanel/backend.js';
@@ -407,6 +410,10 @@ function ProviderSection({ backendUrl, auth }: { backendUrl: string; auth: AuthS
   const [providers, setProviders] = useState<ProviderConfigView[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState(EMPTY_EDIT_FORM);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [form, setForm] = useState({
     displayName: '',
     baseUrl: 'https://openrouter.ai/api/v1',
@@ -427,10 +434,25 @@ function ProviderSection({ backendUrl, auth }: { backendUrl: string; auth: AuthS
     void refresh();
   }, [refresh]);
 
-  const addProvider = async () => {
+  /** Run one mutation with shared busy/error/status handling, then refetch the list. */
+  const run = async (pending: string | null, fn: () => Promise<string | null>) => {
+    if (busy) return;
+    setBusy(true);
     setError(null);
-    setStatus(null);
+    setStatus(pending);
     try {
+      const done = await fn();
+      setStatus(done);
+      await refresh();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addProvider = () =>
+    run(null, async () => {
       await createProvider(backendUrl, token, workspaceId, {
         displayName: form.displayName,
         baseUrl: form.baseUrl,
@@ -438,34 +460,120 @@ function ProviderSection({ backendUrl, auth }: { backendUrl: string; auth: AuthS
         apiKey: form.apiKey,
       });
       setForm((f) => ({ ...f, apiKey: '', displayName: '' }));
-      setStatus('Provider saved.');
-      await refresh();
-    } catch (e) {
-      setError(messageOf(e));
-    }
-  };
+      return 'Provider saved.';
+    });
 
-  const test = async (id: string) => {
-    setError(null);
-    setStatus('Testing…');
-    try {
+  const test = (id: string) =>
+    run('Testing…', async () => {
       const res = await validateProvider(backendUrl, token, workspaceId, id);
-      setStatus(res.message);
-      await refresh();
-    } catch (e) {
-      setError(messageOf(e));
-    }
+      return res.message;
+    });
+
+  const makeDefault = (id: string) =>
+    run('Setting default…', async () => {
+      await setDefaultProvider(backendUrl, token, workspaceId, id);
+      return 'Default provider updated.';
+    });
+
+  const startEdit = (p: ProviderConfigView) => {
+    setConfirmDeleteId(null);
+    setEditingId(p.id);
+    setEditForm({ displayName: p.displayName, baseUrl: p.baseUrl, modelName: p.modelName, apiKey: '' });
   };
 
-  const makeDefault = async (id: string) => {
-    setError(null);
-    try {
-      await setDefaultProvider(backendUrl, token, workspaceId, id);
-      await refresh();
-    } catch (e) {
-      setError(messageOf(e));
-    }
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm(EMPTY_EDIT_FORM);
   };
+
+  const saveEdit = (id: string) =>
+    run('Saving…', async () => {
+      await updateProvider(backendUrl, token, workspaceId, id, {
+        displayName: editForm.displayName,
+        baseUrl: editForm.baseUrl,
+        modelName: editForm.modelName,
+      });
+      if (editForm.apiKey.trim()) {
+        await rotateProviderSecret(backendUrl, token, workspaceId, id, editForm.apiKey);
+      }
+      cancelEdit();
+      return 'Provider updated.';
+    });
+
+  const remove = (id: string) =>
+    run('Removing…', async () => {
+      await deleteProvider(backendUrl, token, workspaceId, id);
+      setConfirmDeleteId(null);
+      if (editingId === id) cancelEdit();
+      return 'Provider removed.';
+    });
+
+  const editor = (p: ProviderConfigView) => (
+    <div style={{ marginTop: 6 }}>
+      <input
+        type="text"
+        placeholder="Display name"
+        value={editForm.displayName}
+        onChange={(e) => setEditForm((f) => ({ ...f, displayName: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="Base URL"
+        value={editForm.baseUrl}
+        onChange={(e) => setEditForm((f) => ({ ...f, baseUrl: e.target.value }))}
+      />
+      <input
+        type="text"
+        placeholder="Model"
+        value={editForm.modelName}
+        onChange={(e) => setEditForm((f) => ({ ...f, modelName: e.target.value }))}
+      />
+      <input
+        type="password"
+        placeholder="API key (stored — leave blank to keep)"
+        value={editForm.apiKey}
+        onChange={(e) => setEditForm((f) => ({ ...f, apiKey: e.target.value }))}
+      />
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="primary" disabled={busy} onClick={() => saveEdit(p.id)}>
+          Save changes
+        </button>
+        <button className="ghost" disabled={busy} onClick={cancelEdit}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+
+  const rowActions = (p: ProviderConfigView) =>
+    confirmDeleteId === p.id ? (
+      <span className="row" style={{ display: 'inline-flex', gap: 6, marginLeft: 8 }}>
+        <span className="muted">Remove &quot;{p.displayName}&quot;?</span>
+        <button className="ghost" disabled={busy} onClick={() => remove(p.id)}>
+          Confirm
+        </button>
+        <button className="ghost" disabled={busy} onClick={() => setConfirmDeleteId(null)}>
+          Cancel
+        </button>
+      </span>
+    ) : (
+      <span className="row" style={{ display: 'inline-flex', gap: 6, marginLeft: 8 }}>
+        <button className="ghost" disabled={busy} onClick={() => test(p.id)}>
+          Test
+        </button>
+        {!p.isWorkspaceDefault && (
+          <button className="ghost" disabled={busy} onClick={() => makeDefault(p.id)}>
+            Set default
+          </button>
+        )}
+        <button className="ghost" disabled={busy} onClick={() => startEdit(p)}>
+          Edit
+        </button>
+        <button className="ghost" disabled={busy} onClick={() => setConfirmDeleteId(p.id)}>
+          Remove
+        </button>
+      </span>
+    );
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -476,19 +584,9 @@ function ProviderSection({ backendUrl, auth }: { backendUrl: string; auth: AuthS
           <li key={p.id}>
             <strong>{p.displayName}</strong> — {p.modelName}{' '}
             {p.isWorkspaceDefault && <span className="chip ok">default</span>}{' '}
+            {!p.enabled && <span className="chip">disabled</span>}{' '}
             <span className="muted">[{p.validationStatus}]</span>
-            {canManage && (
-              <span className="row" style={{ display: 'inline-flex', gap: 6, marginLeft: 8 }}>
-                <button className="ghost" onClick={() => test(p.id)}>
-                  Test
-                </button>
-                {!p.isWorkspaceDefault && (
-                  <button className="ghost" onClick={() => makeDefault(p.id)}>
-                    Set default
-                  </button>
-                )}
-              </span>
-            )}
+            {canManage && (editingId === p.id ? editor(p) : rowActions(p))}
           </li>
         ))}
       </ul>
@@ -521,7 +619,7 @@ function ProviderSection({ backendUrl, auth }: { backendUrl: string; auth: AuthS
             onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
           />
           <div className="row" style={{ marginTop: 8 }}>
-            <button className="primary" onClick={addProvider}>
+            <button className="primary" disabled={busy} onClick={addProvider}>
               Save provider
             </button>
           </div>
@@ -534,6 +632,8 @@ function ProviderSection({ backendUrl, auth }: { backendUrl: string; auth: AuthS
     </div>
   );
 }
+
+const EMPTY_EDIT_FORM = { displayName: '', baseUrl: '', modelName: '', apiKey: '' };
 
 function messageOf(e: unknown): string {
   if (e instanceof ApiClientError) return e.message;

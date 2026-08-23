@@ -3,14 +3,18 @@ import type { PageModel, TestSession } from '@qa-copilot/shared';
 import { EMPTY_AUTH, type AuthState } from '../shared/messages.js';
 import {
   analyzePageSmart,
+  deleteProvider,
   generateBugReportSmart,
   generatePlaywrightSmart,
   generateTestCasesSmart,
   listEnvironments,
   listProjects,
   resolveUrl,
+  rotateProviderSecret,
   sendChatMessage,
   sendChatMessageSmart,
+  setDefaultProvider,
+  updateProvider,
   type ChatMessage,
 } from './backend.js';
 
@@ -310,6 +314,48 @@ describe('sendChatMessage', () => {
     await expect(sendChatMessage(BACKEND, messages)).rejects.toMatchObject({
       name: 'ApiClientError',
       status: 502,
+    });
+  });
+});
+
+describe('provider management', () => {
+  it('updateProvider PATCHes the patch body with the bearer token', async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { id: 'p1', displayName: 'New', isWorkspaceDefault: true }));
+    const out = await updateProvider(BACKEND, 'tok', 'ws1', 'p1', { displayName: 'New' });
+    expect(out.isWorkspaceDefault).toBe(true);
+    expect(call().url).toBe(`${BACKEND}/api/workspaces/ws1/llm-providers/p1`);
+    expect(call().init.method).toBe('PATCH');
+    expect((call().init.headers as Record<string, string>).authorization).toBe('Bearer tok');
+    expect(bodyOf()).toEqual({ displayName: 'New' });
+  });
+
+  it('rotateProviderSecret POSTs the new key to /rotate-secret', async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { ok: true }));
+    await rotateProviderSecret(BACKEND, 'tok', 'ws1', 'p1', 'sk-new');
+    expect(call().url).toBe(`${BACKEND}/api/workspaces/ws1/llm-providers/p1/rotate-secret`);
+    expect(call().init.method).toBe('POST');
+    expect(bodyOf()).toEqual({ apiKey: 'sk-new' });
+  });
+
+  it('deleteProvider sends DELETE and tolerates an empty 204 body', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      statusText: 'No Content',
+      text: () => Promise.resolve(''),
+      json: () => Promise.reject(new Error('no body')),
+    } as unknown as Response);
+    await expect(deleteProvider(BACKEND, 'tok', 'ws1', 'p1')).resolves.toBeUndefined();
+    expect(call().url).toBe(`${BACKEND}/api/workspaces/ws1/llm-providers/p1`);
+    expect(call().init.method).toBe('DELETE');
+    expect(call().init.body).toBeUndefined();
+  });
+
+  it('setDefaultProvider surfaces a 409 (disabled provider) as ApiClientError', async () => {
+    fetchMock.mockResolvedValueOnce(res(409, { error: 'Provider is disabled' }));
+    await expect(setDefaultProvider(BACKEND, 'tok', 'ws1', 'p1')).rejects.toMatchObject({
+      status: 409,
+      message: 'Provider is disabled',
     });
   });
 });

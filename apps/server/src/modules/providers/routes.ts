@@ -10,6 +10,8 @@ import { authMiddleware, requireMember } from '../auth/middleware.js';
 import { PROVIDER_ADMIN_ROLES } from '../rbac.js';
 import {
   createProviderConfig,
+  deleteProviderConfig,
+  getWorkspaceDefaultId,
   listProviderConfigs,
   rotateProviderSecret,
   setWorkspaceDefault,
@@ -53,7 +55,7 @@ export function providersRouter(
         allowPrivateHosts,
         ...body,
       });
-      res.status(201).json(toPublicConfig(config, null));
+      res.status(201).json(toPublicConfig(config, await getWorkspaceDefaultId(db, ws(req))));
     }),
   );
 
@@ -69,7 +71,20 @@ export function providersRouter(
         allowPrivateHosts,
         patch,
       });
-      res.json(toPublicConfig(config, null));
+      res.json(toPublicConfig(config, await getWorkspaceDefaultId(db, ws(req))));
+    }),
+  );
+
+  router.delete(
+    '/:providerId',
+    requireMember(db, ...PROVIDER_ADMIN_ROLES),
+    asyncHandler(async (req, res) => {
+      await deleteProviderConfig(db, {
+        workspaceId: ws(req),
+        id: req.params.providerId!,
+        actorUserId: req.user!.id,
+      });
+      res.status(204).end();
     }),
   );
 

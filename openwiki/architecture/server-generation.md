@@ -52,6 +52,7 @@ Called by the extension today:
 | `POST /api/workspaces/:workspaceId/projects/:projectId/environments` | `modules/projects/routes.ts` |
 | `PATCH /api/workspaces/:workspaceId/llm-providers/:providerId` | `modules/providers/routes.ts` |
 | `POST /api/workspaces/:workspaceId/llm-providers/:providerId/rotate-secret` | `modules/providers/routes.ts` |
+| `DELETE /api/workspaces/:workspaceId/llm-providers/:providerId` | `modules/providers/routes.ts` |
 
 ## Prompt behavior
 
